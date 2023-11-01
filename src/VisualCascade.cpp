@@ -14,4 +14,8 @@ using namespace std;
 struct getRect { Rect operator ()(const CvAvgComp& e) const { return e.rect; } };
 struct getNeighbors { int operator ()(const CvAvgComp& e) const { return e.neighbors; } };
 
-string VisualCascade::mWindowName = "Cascade
+string VisualCascade::mWindowName = "Cascade Visualiser";
+
+void VisualCascade::detectMultiScale(InputArray showImage, InputArray _image, std::vector<Rect>& objects,
+	double showScale, int depth, double scaleFactor, int minNeighbors,
+	int flags, Size minObjec
