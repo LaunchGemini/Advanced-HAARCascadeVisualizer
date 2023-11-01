@@ -9,4 +9,9 @@
 #include "objdetect/VisualHaar.hpp"
 
 using namespace cv;
-using n
+using namespace std;
+
+struct getRect { Rect operator ()(const CvAvgComp& e) const { return e.rect; } };
+struct getNeighbors { int operator ()(const CvAvgComp& e) const { return e.neighbors; } };
+
+string VisualCascade::mWindowName = "Cascade
