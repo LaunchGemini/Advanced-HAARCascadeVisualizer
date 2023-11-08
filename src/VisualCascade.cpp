@@ -27,4 +27,13 @@ void VisualCascade::detectMultiScale(InputArray showImage, InputArray _image, st
 	std::vector<int> rejectLevels;
 	std::vector<double> levelWeights;
 	mProgress = showImage.getMat();
-	Mat 
+	Mat image = _image.getMat();
+	CV_Assert(scaleFactor > 1 && image.depth() == CV_8U);
+
+	if (empty()) return;
+
+	std::vector<int> numDetections;
+	if (isOldFormatCascade())
+	{
+		CvHaarClassifierCascade* oldC = static_cast<CvHaarClassifierCascade*>(getOldCascade());
+		m
