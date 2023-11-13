@@ -36,4 +36,10 @@ void VisualCascade::detectMultiScale(InputArray showImage, InputArray _image, st
 	if (isOldFormatCascade())
 	{
 		CvHaarClassifierCascade* oldC = static_cast<CvHaarClassifierCascade*>(getOldCascade());
-		m
+		mOriginalWindowSize = Size(oldC->orig_window_size);
+
+		std::vector<CvAvgComp> vecAvgComp;
+
+		MemStorage storage(cvCreateMemStorage(0));
+		CvMat _image = image;
+		CvSeq* _objects = viscasHaarDetectObjectsForROC(&_image, oldCascade, storage, 
