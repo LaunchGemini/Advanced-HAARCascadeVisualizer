@@ -42,4 +42,8 @@ void VisualCascade::detectMultiScale(InputArray showImage, InputArray _image, st
 
 		MemStorage storage(cvCreateMemStorage(0));
 		CvMat _image = image;
-		CvSeq* _objects = viscasHaarDetectObjectsForROC(&_image, oldCascade, storage, 
+		CvSeq* _objects = viscasHaarDetectObjectsForROC(&_image, oldCascade, storage, rejectLevels, levelWeights, scaleFactor,
+			minNeighbors, flags, minObjectSize, maxObjectSize, false, this);
+		Seq<CvAvgComp>(_objects).copyTo(vecAvgComp);
+		objects.resize(vecAvgComp.size());
+		std::transform(vecAvgComp.begin()
