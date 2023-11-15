@@ -46,4 +46,11 @@ void VisualCascade::detectMultiScale(InputArray showImage, InputArray _image, st
 			minNeighbors, flags, minObjectSize, maxObjectSize, false, this);
 		Seq<CvAvgComp>(_objects).copyTo(vecAvgComp);
 		objects.resize(vecAvgComp.size());
-		std::transform(vecAvgComp.begin()
+		std::transform(vecAvgComp.begin(), vecAvgComp.end(), objects.begin(), getRect());
+
+		numDetections.resize(vecAvgComp.size());
+		std::transform(vecAvgComp.begin(), vecAvgComp.end(), numDetections.begin(), getNeighbors());
+	}
+	else
+	{
+		cout << "New format cascade not supp
