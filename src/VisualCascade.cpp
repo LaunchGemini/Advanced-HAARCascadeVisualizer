@@ -53,4 +53,7 @@ void VisualCascade::detectMultiScale(InputArray showImage, InputArray _image, st
 	}
 	else
 	{
-		cout << "New format cascade not supp
+		cout << "New format cascade not supported for visualisation" << endl;
+		detectMultiScaleNoGrouping(image, objects, rejectLevels, levelWeights, scaleFactor, minObjectSize, maxObjectSize);
+		const double GROUP_EPS = 0.2;
+		groupRectangles(objects, numDetections, minNeighbors
