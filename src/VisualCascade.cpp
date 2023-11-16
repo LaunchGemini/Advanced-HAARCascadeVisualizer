@@ -56,4 +56,19 @@ void VisualCascade::detectMultiScale(InputArray showImage, InputArray _image, st
 		cout << "New format cascade not supported for visualisation" << endl;
 		detectMultiScaleNoGrouping(image, objects, rejectLevels, levelWeights, scaleFactor, minObjectSize, maxObjectSize);
 		const double GROUP_EPS = 0.2;
-		groupRectangles(objects, numDetections, minNeighbors
+		groupRectangles(objects, numDetections, minNeighbors, GROUP_EPS);
+	}
+}
+
+int VisualCascade::getDepth() const
+{
+	return mVisualisationDepth;
+}
+
+void VisualCascade::setImagePath(string path)
+{
+	mImagePath = path;
+	mFrameCounter = 0;
+}
+
+void VisualCascade::setV
