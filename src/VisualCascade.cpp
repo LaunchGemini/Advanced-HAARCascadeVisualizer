@@ -83,4 +83,8 @@ void VisualCascade::setIntegral(cv::Size integralSize, cv::Mat sum, cv::Mat sqsu
 	mSqsum = sqsum;
 }
 
-void VisualCascade::setWindow(int x, int y, Size detectWi
+void VisualCascade::setWindow(int x, int y, Size detectWindowSize, Size ssz)
+{
+	Size showWindowSize(static_cast<int>(mShowScale * detectWindowSize.width), static_cast<int>(mShowScale * detectWindowSize.height));
+	int xOffset = (mProgress.cols - showWindowSize.width)  * x / ssz.width;
+	
