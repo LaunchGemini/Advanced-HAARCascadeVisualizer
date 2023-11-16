@@ -87,4 +87,8 @@ void VisualCascade::setWindow(int x, int y, Size detectWindowSize, Size ssz)
 {
 	Size showWindowSize(static_cast<int>(mShowScale * detectWindowSize.width), static_cast<int>(mShowScale * detectWindowSize.height));
 	int xOffset = (mProgress.cols - showWindowSize.width)  * x / ssz.width;
-	
+	int yOffset = (mProgress.rows - showWindowSize.height) * y / ssz.height;
+	mWindow = Rect(Point(xOffset, yOffset), showWindowSize);
+}
+
+void VisualCascade::show(const vector<int>& branches, int featureIndex, int nFeatures, const CvHid
