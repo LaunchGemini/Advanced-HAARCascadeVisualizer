@@ -71,4 +71,16 @@ void VisualCascade::setImagePath(string path)
 	mFrameCounter = 0;
 }
 
-void VisualCascade::setV
+void VisualCascade::setVideo(string path)
+{
+	mVideoPath = path;
+}
+
+void VisualCascade::setIntegral(cv::Size integralSize, cv::Mat sum, cv::Mat sqsum)
+{
+	mIntegralSize = integralSize;
+	mSum = sum;
+	mSqsum = sqsum;
+}
+
+void VisualCascade::setWindow(int x, int y, Size detectWi
