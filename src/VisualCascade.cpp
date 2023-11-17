@@ -114,4 +114,9 @@ void VisualCascade::show(string caption, int featureIndex, int nFeatures, const 
 {
 	Mat result;
 	mProgress.copyTo(result);
-	rectangle(result, mWindow, Scalar(0, 0, 255),
+	rectangle(result, mWindow, Scalar(0, 0, 255), 2);
+	drawFeature(result, feature);
+	
+	int x = mWindow.x;
+	int y = min(mWindow.y + mWindow.height + 12, result.rows - 24);
+	borderText(result, caption, Point(x, y), CV_FONT_HERSHEY_PLAIN, 1, Scalar(0, 0, 255), Scalar(32
