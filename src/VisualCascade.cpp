@@ -107,4 +107,11 @@ void VisualCascade::show(int stage, int featureIndex, int nFeatures, const CvHid
 {
 	stringstream description;
 	description << "Stage: " << stage;
-	show(description
+	show(description.str(), featureIndex, nFeatures, feature);
+}
+
+void VisualCascade::show(string caption, int featureIndex, int nFeatures, const CvHidHaarFeature& feature)
+{
+	Mat result;
+	mProgress.copyTo(result);
+	rectangle(result, mWindow, Scalar(0, 0, 255),
