@@ -100,4 +100,11 @@ void VisualCascade::show(const vector<int>& branches, int featureIndex, int nFea
 		if (index > 0) description << "-";
 		description << branches[index];
 	}
-	show(description.str(), feat
+	show(description.str(), featureIndex, nFeatures, feature);
+}
+
+void VisualCascade::show(int stage, int featureIndex, int nFeatures, const CvHidHaarFeature& feature)
+{
+	stringstream description;
+	description << "Stage: " << stage;
+	show(description
