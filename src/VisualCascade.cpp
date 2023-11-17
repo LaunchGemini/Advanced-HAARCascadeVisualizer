@@ -91,4 +91,13 @@ void VisualCascade::setWindow(int x, int y, Size detectWindowSize, Size ssz)
 	mWindow = Rect(Point(xOffset, yOffset), showWindowSize);
 }
 
-void VisualCascade::show(const vector<int>& branches, int featureIndex, int nFeatures, const CvHid
+void VisualCascade::show(const vector<int>& branches, int featureIndex, int nFeatures, const CvHidHaarFeature& feature)
+{
+	stringstream description;
+	description << "Branch: ";
+	for (unsigned index = 0; index < branches.size(); index++)
+	{
+		if (index > 0) description << "-";
+		description << branches[index];
+	}
+	show(description.str(), feat
