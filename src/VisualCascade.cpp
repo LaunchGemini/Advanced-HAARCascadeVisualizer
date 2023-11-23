@@ -119,4 +119,9 @@ void VisualCascade::show(string caption, int featureIndex, int nFeatures, const 
 	
 	int x = mWindow.x;
 	int y = min(mWindow.y + mWindow.height + 12, result.rows - 24);
-	borderText(result, caption, Point(x, y), CV_FONT_HERSHEY_PLAIN, 1, Scalar(0, 0, 255), Scalar(32
+	borderText(result, caption, Point(x, y), CV_FONT_HERSHEY_PLAIN, 1, Scalar(0, 0, 255), Scalar(32, 32, 64));
+	stringstream description;
+	description << "Feature: " << featureIndex << " of " << nFeatures;
+	borderText(result, description.str(), Point(x, y + 12), CV_FONT_HERSHEY_PLAIN, 1, Scalar(0, 0, 255), Scalar(32, 32, 64));
+
+	if
