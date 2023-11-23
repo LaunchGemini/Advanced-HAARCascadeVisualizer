@@ -133,4 +133,11 @@ void VisualCascade::show(string caption, int featureIndex, int nFeatures, const 
 	}
 }
 
-void VisualCascade::borderText(Mat& image, string text, Point origin, int font, double scale, Scalar colour, Scalar borderCol
+void VisualCascade::borderText(Mat& image, string text, Point origin, int font, double scale, Scalar colour, Scalar borderColour)
+{
+	for (int dy = -1; dy <= 1; dy++)
+	{
+		for (int dx = -1; dx <= 1; dx++)
+		{
+			if (dx == 0 && dy == 0) continue;
+			putText(image, text, Point(origin.x + dx, origin.y + dy), font, scale, borderC
