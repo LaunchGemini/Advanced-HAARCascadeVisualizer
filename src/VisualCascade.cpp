@@ -140,4 +140,14 @@ void VisualCascade::borderText(Mat& image, string text, Point origin, int font, 
 		for (int dx = -1; dx <= 1; dx++)
 		{
 			if (dx == 0 && dy == 0) continue;
-			putText(image, text, Point(origin.x + dx, origin.y + dy), font, scale, borderC
+			putText(image, text, Point(origin.x + dx, origin.y + dy), font, scale, borderColour);
+		}
+	}
+	putText(image, text, origin, font, scale, colour);
+}
+
+void VisualCascade::drawFeature(cv::Mat image, const CvHidHaarFeature& feature)
+{
+	for (int rectIndex = 0; rectIndex < CV_HAAR_FEATURE_MAX; rectIndex++)
+	{
+		HaarFeatureRect hfr = featur
