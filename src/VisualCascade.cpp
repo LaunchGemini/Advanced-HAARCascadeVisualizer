@@ -150,4 +150,9 @@ void VisualCascade::drawFeature(cv::Mat image, const CvHidHaarFeature& feature)
 {
 	for (int rectIndex = 0; rectIndex < CV_HAAR_FEATURE_MAX; rectIndex++)
 	{
-		HaarFeatureRect hfr = featur
+		HaarFeatureRect hfr = feature.rect[rectIndex];
+		if (!hfr.p0) break;
+		int stride = mIntegralSize.width + 1;
+
+		int topLIndex = hfr.p0 - reinterpret_cast<sumtype*>(mSum.data); // Use to draw
+		int topRIndex = hfr.p1 - reinterpret_cast<sumtype*>(mSum.
