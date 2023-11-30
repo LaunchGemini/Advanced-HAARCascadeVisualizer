@@ -159,4 +159,7 @@ void VisualCascade::drawFeature(cv::Mat image, const CvHidHaarFeature& feature)
 		int botLIndex = hfr.p2 - reinterpret_cast<sumtype*>(mSum.data); // Use to check
 		int botRIndex = hfr.p3 - reinterpret_cast<sumtype*>(mSum.data); // Use to draw
 
-		// Perform checks so make sure we
+		// Perform checks so make sure we have the right stride
+		if (topRIndex % stride != botRIndex % stride) cout << "p1 misaligned x" << endl;
+		if (topRIndex / stride != topLIndex / stride) cout << "p1 misaligned y" << endl;
+		if (botLIndex % stride != topLIndex % stride) co
