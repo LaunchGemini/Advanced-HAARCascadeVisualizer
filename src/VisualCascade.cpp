@@ -155,4 +155,8 @@ void VisualCascade::drawFeature(cv::Mat image, const CvHidHaarFeature& feature)
 		int stride = mIntegralSize.width + 1;
 
 		int topLIndex = hfr.p0 - reinterpret_cast<sumtype*>(mSum.data); // Use to draw
-		int topRIndex = hfr.p1 - reinterpret_cast<sumtype*>(mSum.
+		int topRIndex = hfr.p1 - reinterpret_cast<sumtype*>(mSum.data); // Use to check
+		int botLIndex = hfr.p2 - reinterpret_cast<sumtype*>(mSum.data); // Use to check
+		int botRIndex = hfr.p3 - reinterpret_cast<sumtype*>(mSum.data); // Use to draw
+
+		// Perform checks so make sure we
