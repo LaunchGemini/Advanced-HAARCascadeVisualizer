@@ -168,4 +168,12 @@ void VisualCascade::drawFeature(cv::Mat image, const CvHidHaarFeature& feature)
 		double xScale = mWindow.width  / static_cast<double>(mOriginalWindowSize.width);
 		double yScale = mWindow.height / static_cast<double>(mOriginalWindowSize.height);
 		Point topL(static_cast<int>((topLIndex % stride) * xScale), static_cast<int>((topLIndex / stride) * yScale));
-		Point botR(static_cast<int>((botRIndex % stride) * xScale), static_cast<int>((botRIndex / stride) * 
+		Point botR(static_cast<int>((botRIndex % stride) * xScale), static_cast<int>((botRIndex / stride) * yScale));
+		topL += mWindow.tl();
+		botR += mWindow.tl();
+		Scalar color = hfr.weight > 0 ? Scalar(255, 255, 255) : Scalar(0, 0, 0);
+		rectangle(image, Rect(topL, botR), color, CV_FILLED);
+	}
+}
+
+Mat VisualCascade::getProgressImage() co
