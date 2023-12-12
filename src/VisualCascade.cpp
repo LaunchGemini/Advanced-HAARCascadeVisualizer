@@ -166,4 +166,6 @@ void VisualCascade::drawFeature(cv::Mat image, const CvHidHaarFeature& feature)
 		if (botLIndex / stride != botRIndex / stride) cout << "p1 misaligned y" << endl;
 
 		double xScale = mWindow.width  / static_cast<double>(mOriginalWindowSize.width);
-		double yScale = mWindow.height / static_c
+		double yScale = mWindow.height / static_cast<double>(mOriginalWindowSize.height);
+		Point topL(static_cast<int>((topLIndex % stride) * xScale), static_cast<int>((topLIndex / stride) * yScale));
+		Point botR(static_cast<int>((botRIndex % stride) * xScale), static_cast<int>((botRIndex / stride) * 
