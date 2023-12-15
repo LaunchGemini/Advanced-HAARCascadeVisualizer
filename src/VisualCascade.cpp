@@ -199,4 +199,12 @@ void VisualCascade::recordImage(Mat image)
 		filename << mImagePath << "/CascadeFrame" << setfill('0') << setw(7) << mFrameCounter++ << ".png";
 		imwrite(filename.str(), image);
 	}
-	if (!mVideoPa
+	if (!mVideoPath.empty())
+	{
+		if (!mOutVideo.isOpened())
+		{
+			mOutVideo.open(mVideoPath, VideoWriter::fourcc('H', '2', '6', '4'), 30, image.size());
+			if (!mOutVideo.isOpened())
+			{
+				cerr << "Failed to create a video writer" << endl;
+				mVi
