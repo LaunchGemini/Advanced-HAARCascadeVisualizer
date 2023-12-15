@@ -176,4 +176,19 @@ void VisualCascade::drawFeature(cv::Mat image, const CvHidHaarFeature& feature)
 	}
 }
 
-Mat VisualCascade::getProgressImage() co
+Mat VisualCascade::getProgressImage() const
+{
+	return mProgress;
+}
+
+void VisualCascade::keepWindow()
+{
+	rectangle(mProgress, mWindow, Scalar(0, 255, 0));
+}
+
+bool VisualCascade::isRecording() const
+{
+	return !mVideoPath.empty() || !mImagePath.empty();
+}
+
+void VisualCascade::recordI
