@@ -191,4 +191,12 @@ bool VisualCascade::isRecording() const
 	return !mVideoPath.empty() || !mImagePath.empty();
 }
 
-void VisualCascade::recordI
+void VisualCascade::recordImage(Mat image)
+{
+	if (!mImagePath.empty())
+	{
+		stringstream filename;
+		filename << mImagePath << "/CascadeFrame" << setfill('0') << setw(7) << mFrameCounter++ << ".png";
+		imwrite(filename.str(), image);
+	}
+	if (!mVideoPa
