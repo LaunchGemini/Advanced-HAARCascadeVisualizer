@@ -207,4 +207,10 @@ void VisualCascade::recordImage(Mat image)
 			if (!mOutVideo.isOpened())
 			{
 				cerr << "Failed to create a video writer" << endl;
-				mVi
+				mVideoPath = string();
+				return;
+			}
+		}
+		mOutVideo << image;
+	}
+}
