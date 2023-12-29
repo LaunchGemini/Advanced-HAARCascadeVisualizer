@@ -557,3 +557,245 @@ viscasSetImagesForHaarClassifierCascade( CvHaarClassifierCascade* _cascade,
                     }
 
                     hidfeature->rect[k].weight = (float)(feature->rect[k].weight * correction_ratio);
+
+                    if( k == 0 )
+                        area0 = tr.width * tr.height;
+                    else
+                        sum0 += hidfeature->rect[k].weight * tr.width * tr.height;
+                }
+
+                hidfeature->rect[0].weight = (float)(-sum0/area0);
+            } /* l */
+        } /* j */
+    }
+}
+
+CV_INLINE
+double icvEvalHidHaarClassifier( CvHidHaarClassifier* classifier,
+                                 double variance_norm_factor,
+                                 size_t p_offset )
+{
+    int idx = 0;
+    {
+        do
+        {
+            CvHidHaarTreeNode* node = classifier->node + idx;
+            double t = node->threshold * variance_norm_factor;
+
+            double sum = calc_sum(node->feature.rect[0],p_offset) * node->feature.rect[0].weight;
+            sum += calc_sum(node->feature.rect[1],p_offset) * node->feature.rect[1].weight;
+
+            if( node->feature.rect[2].p0 )
+                sum += calc_sum(node->feature.rect[2],p_offset) * node->feature.rect[2].weight;
+
+            idx = sum < t ? node->left : node->right;
+        }
+        while( idx > 0 );
+    }
+    return classifier->alpha[-idx];
+}
+
+
+
+static int
+viscasRunHaarClassifierCascadeSum( const CvHaarClassifierCascade* _cascade,
+                               CvPoint pt, double& stage_sum, int start_stage, VisualCascade* pVisCas )
+{
+    int p_offset, pq_offset;
+    int i, j;
+    double mean, variance_norm_factor;
+    CvHidHaarClassifierCascade* cascade;
+
+    if( !CV_IS_HAAR_CLASSIFIER(_cascade) )
+        CV_Error( !_cascade ? CV_StsNullPtr : CV_StsBadArg, "Invalid cascade pointer" );
+
+    cascade = _cascade->hid_cascade;
+    if( !cascade )
+        CV_Error( CV_StsNullPtr, "Hidden cascade has not been created.\n"
+            "Use cvSetImagesForHaarClassifierCascade" );
+
+    if( pt.x < 0 || pt.y < 0 ||
+        pt.x + _cascade->real_window_size.width >= cascade->sum.width ||
+        pt.y + _cascade->real_window_size.height >= cascade->sum.height )
+        return -1;
+
+    p_offset = pt.y * (cascade->sum.step/sizeof(sumtype)) + pt.x;
+    pq_offset = pt.y * (cascade->sqsum.step/sizeof(sqsumtype)) + pt.x;
+    mean = calc_sum(*cascade,p_offset)*cascade->inv_window_area;
+    variance_norm_factor = cascade->pq0[pq_offset] - cascade->pq1[pq_offset] -
+                           cascade->pq2[pq_offset] + cascade->pq3[pq_offset];
+    variance_norm_factor = variance_norm_factor*cascade->inv_window_area - mean*mean;
+    if( variance_norm_factor >= 0. )
+        variance_norm_factor = std::sqrt(variance_norm_factor);
+    else
+        variance_norm_factor = 1.;
+	
+	int depthLimit = pVisCas->getDepth();
+    if( cascade->is_tree )
+    {
+		std::vector<int> branches;
+		branches.push_back(start_stage);
+        CvHidHaarStageClassifier* ptr = cascade->stage_classifier;
+        assert( start_stage == 0 );
+
+        while( ptr )
+        {
+            stage_sum = 0.0;
+            j = 0;
+            for( ; j < ptr->count; j++ )
+            {
+				if (depthLimit <= 0 || static_cast<int>(branches.size()) < depthLimit) pVisCas->show(branches, j, ptr->count, (ptr->classifier + j)->node->feature);
+                stage_sum += icvEvalHidHaarClassifier( ptr->classifier + j, variance_norm_factor, p_offset );
+            }
+
+            if( stage_sum >= ptr->threshold )
+            {
+				branches.push_back(0);
+                ptr = ptr->child;
+            }
+            else
+            {
+				while (ptr && ptr->next == NULL)
+				{
+					branches.pop_back();
+					ptr = ptr->parent;
+				}
+                if( ptr == NULL )
+                    return 0;
+				branches[branches.size() - 1] = branches.back() + 1;
+                ptr = ptr->next;
+            }
+        }
+    }
+    else if( cascade->isStumpBased )
+    {
+        {
+            for( i = start_stage; i < cascade->count; i++ )
+            {
+                stage_sum = 0.0;
+                if( cascade->stage_classifier[i].two_rects )
+                {
+                    for( j = 0; j < cascade->stage_classifier[i].count; j++ )
+                    {
+                        CvHidHaarClassifier* classifier = cascade->stage_classifier[i].classifier + j;
+                        CvHidHaarTreeNode* node = classifier->node;
+                        double t = node->threshold*variance_norm_factor;
+                        double sum = calc_sum(node->feature.rect[0],p_offset) * node->feature.rect[0].weight;
+                        sum += calc_sum(node->feature.rect[1],p_offset) * node->feature.rect[1].weight;
+                        stage_sum += classifier->alpha[sum >= t];
+						if (depthLimit <= 0 || i < depthLimit) pVisCas->show(i, j, cascade->stage_classifier[i].count, node->feature);
+                    }
+                }
+                else
+                {
+                    for( j = 0; j < cascade->stage_classifier[i].count; j++ )
+                    {
+                        CvHidHaarClassifier* classifier = cascade->stage_classifier[i].classifier + j;
+                        CvHidHaarTreeNode* node = classifier->node;
+                        double t = node->threshold*variance_norm_factor;
+                        double sum = calc_sum(node->feature.rect[0],p_offset) * node->feature.rect[0].weight;
+                        sum += calc_sum(node->feature.rect[1],p_offset) * node->feature.rect[1].weight;
+                        if( node->feature.rect[2].p0 )
+                            sum += calc_sum(node->feature.rect[2],p_offset) * node->feature.rect[2].weight;
+                        stage_sum += classifier->alpha[sum >= t];
+						if (depthLimit <= 0 || i < depthLimit) pVisCas->show(i, j, cascade->stage_classifier[i].count, node->feature);
+                    }
+                }
+                if( stage_sum < cascade->stage_classifier[i].threshold )
+                    return -i;
+            }
+			pVisCas->keepWindow();
+        }
+    }
+    else
+    {
+        for( i = start_stage; i < cascade->count; i++ )
+        {
+            stage_sum = 0.0;
+            int k = 0;
+            for(; k < cascade->stage_classifier[i].count; k++ )
+            {
+
+                stage_sum += icvEvalHidHaarClassifier(
+                    cascade->stage_classifier[i].classifier + k,
+                    variance_norm_factor, p_offset );
+				if (depthLimit <= 0 || i < depthLimit) pVisCas->show(i, k, cascade->stage_classifier[i].count, (cascade->stage_classifier[i].classifier + k)->node->feature);
+            }
+
+            if( stage_sum < cascade->stage_classifier[i].threshold )
+                return -i;
+        }
+		pVisCas->keepWindow();
+    }
+    return 1;
+}
+
+namespace cv
+{
+
+class HaarDetectObjects_ScaleImage_Invoker : public ParallelLoopBody
+{
+public:
+    HaarDetectObjects_ScaleImage_Invoker( const CvHaarClassifierCascade* _cascade,
+                                          int _stripSize, double _factor,
+                                          const Mat& _sum1, const Mat& _sqsum1, Mat* _norm1,
+                                          Mat* _mask1, Rect _equRect, std::vector<Rect>& _vec,
+                                          std::vector<int>& _levels, std::vector<double>& _weights,
+                                          bool _outputLevels, Mutex *_mtx, VisualCascade* pVisCas )
+    {
+        cascade = _cascade;
+        stripSize = _stripSize;
+        factor = _factor;
+        sum1 = _sum1;
+        sqsum1 = _sqsum1;
+        norm1 = _norm1;
+        mask1 = _mask1;
+        equRect = _equRect;
+        vec = &_vec;
+        rejectLevels = _outputLevels ? &_levels : 0;
+        levelWeights = _outputLevels ? &_weights : 0;
+        mtx = _mtx;
+		mpVisCas = pVisCas;
+    }
+
+    void operator()( const Range& range ) const
+    {
+        Size winSize0 = cascade->orig_window_size;
+        Size winSize(cvRound(winSize0.width*factor), cvRound(winSize0.height*factor));
+        int y1 = range.start*stripSize, y2 = std::min(range.end*stripSize, sum1.rows - 1 - winSize0.height);
+
+        if (y2 <= y1 || sum1.cols <= 1 + winSize0.width)
+            return;
+
+        Size ssz(sum1.cols - 1 - winSize0.width, y2 - y1);
+        int x, y, ystep = factor > 2 ? 1 : 2;
+
+		for (y = y1; y < y2; y += ystep)
+		{
+			for (x = 0; x < ssz.width; x += ystep)
+			{
+				mpVisCas->setWindow(x, y - y1, winSize, ssz);
+				double gypWeight;
+				int result = viscasRunHaarClassifierCascadeSum(cascade, cvPoint(x, y), gypWeight, 0, mpVisCas);
+				if (rejectLevels)
+				{
+					if (result == 1)
+						result = -1 * cascade->count;
+					if (cascade->count + result < 4)
+					{
+						mtx->lock();
+						vec->push_back(Rect(cvRound(x*factor), cvRound(y*factor),
+							winSize.width, winSize.height));
+						rejectLevels->push_back(-result);
+						levelWeights->push_back(gypWeight);
+						mtx->unlock();
+					}
+				}
+				else
+				{
+					if (result > 0)
+					{
+						mtx->lock();
+						vec->push_back(Rect(cvRound(x*factor), cvRound(y*factor),
+							winSize.width, winSize.height));
+						mtx->unlock();
