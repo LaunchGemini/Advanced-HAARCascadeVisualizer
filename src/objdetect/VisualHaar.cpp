@@ -799,3 +799,225 @@ public:
 						vec->push_back(Rect(cvRound(x*factor), cvRound(y*factor),
 							winSize.width, winSize.height));
 						mtx->unlock();
+						mpVisCas->keepWindow();
+					}
+				}
+			}
+		}
+    }
+
+    const CvHaarClassifierCascade* cascade;
+    int stripSize;
+    double factor;
+    Mat sum1, sqsum1, *norm1, *mask1;
+    Rect equRect;
+    std::vector<Rect>* vec;
+    std::vector<int>* rejectLevels;
+    std::vector<double>* levelWeights;
+    Mutex* mtx;
+	VisualCascade* mpVisCas;
+};
+
+
+}
+
+
+CvSeq*
+viscasHaarDetectObjectsForROC( const CvArr* _img,
+                     CvHaarClassifierCascade* cascade, CvMemStorage* storage,
+                     std::vector<int>& rejectLevels, std::vector<double>& levelWeights,
+                     double scaleFactor, int minNeighbors, int flags,
+                     CvSize minSize, CvSize maxSize, bool outputRejectLevels, VisualCascade* pVisCas )
+{
+    const double GROUP_EPS = 0.2;
+    CvMat stub, *img = (CvMat*)_img;
+    cv::Ptr<CvMat> temp, sum, tilted, sqsum, normImg, sumcanny, imgSmall;
+    CvSeq* result_seq = 0;
+    cv::Ptr<CvMemStorage> temp_storage;
+
+    std::vector<cv::Rect> allCandidates;
+    std::vector<cv::Rect> rectList;
+    std::vector<int> rweights;
+    double factor;
+    int coi;
+    bool doCannyPruning = (flags & CV_HAAR_DO_CANNY_PRUNING) != 0;
+    bool findBiggestObject = (flags & CV_HAAR_FIND_BIGGEST_OBJECT) != 0;
+    bool roughSearch = (flags & CV_HAAR_DO_ROUGH_SEARCH) != 0;
+    cv::Mutex mtx;
+
+    if( !CV_IS_HAAR_CLASSIFIER(cascade) )
+        CV_Error( !cascade ? CV_StsNullPtr : CV_StsBadArg, "Invalid classifier cascade" );
+
+    if( !storage )
+        CV_Error( CV_StsNullPtr, "Null storage pointer" );
+
+    img = cvGetMat( img, &stub, &coi );
+    if( coi )
+        CV_Error( CV_BadCOI, "COI is not supported" );
+
+    if( CV_MAT_DEPTH(img->type) != CV_8U )
+        CV_Error( CV_StsUnsupportedFormat, "Only 8-bit images are supported" );
+
+    if( scaleFactor <= 1 )
+        CV_Error( CV_StsOutOfRange, "scale factor must be > 1" );
+
+    if( findBiggestObject )
+        flags &= ~CV_HAAR_SCALE_IMAGE;
+
+    if( maxSize.height == 0 || maxSize.width == 0 )
+    {
+        maxSize.height = img->rows;
+        maxSize.width = img->cols;
+    }
+
+    temp.reset(cvCreateMat( img->rows, img->cols, CV_8UC1 ));
+    sum.reset(cvCreateMat( img->rows + 1, img->cols + 1, CV_32SC1 ));
+    sqsum.reset(cvCreateMat( img->rows + 1, img->cols + 1, CV_64FC1 ));
+
+    if( !cascade->hid_cascade )
+        icvCreateHidHaarClassifierCascade(cascade);
+
+    if( cascade->hid_cascade->has_tilted_features )
+        tilted.reset(cvCreateMat( img->rows + 1, img->cols + 1, CV_32SC1 ));
+
+    result_seq = cvCreateSeq( 0, sizeof(CvSeq), sizeof(CvAvgComp), storage );
+
+    if( CV_MAT_CN(img->type) > 1 )
+    {
+        cvCvtColor( img, temp, CV_BGR2GRAY );
+        img = temp;
+    }
+
+    if( findBiggestObject )
+        flags &= ~(CV_HAAR_SCALE_IMAGE|CV_HAAR_DO_CANNY_PRUNING);
+
+    //if( flags & CV_HAAR_SCALE_IMAGE )
+    {
+        CvSize winSize0 = cascade->orig_window_size;
+        imgSmall.reset(cvCreateMat( img->rows + 1, img->cols + 1, CV_8UC1 ));
+
+		// First increase the factor until we find the one past the biggest one
+		for (factor = 1; ; factor *= scaleFactor)
+		{
+			CvSize winSize(cvRound(winSize0.width*factor),
+				cvRound(winSize0.height*factor));
+			CvSize sz(cvRound(img->cols / factor), cvRound(img->rows / factor));
+			CvSize sz1(sz.width - winSize0.width + 1, sz.height - winSize0.height + 1);
+
+			if (sz1.width <= 0 || sz1.height <= 0)
+				break;
+			if (winSize.width > maxSize.width || winSize.height > maxSize.height)
+				break;
+			if (winSize.width < minSize.width || winSize.height < minSize.height)
+				continue;
+		}
+
+		// Reduce the factor once to get the biggest valid factor
+		// Keep reducing untill we are back at 1
+        for(factor /= scaleFactor; factor >= 1; factor /= scaleFactor )
+        {
+            CvSize winSize(cvRound(winSize0.width*factor),
+                                cvRound(winSize0.height*factor));
+            CvSize sz(cvRound( img->cols/factor ), cvRound( img->rows/factor ));
+            CvSize sz1(sz.width - winSize0.width + 1, sz.height - winSize0.height + 1);
+
+            CvRect equRect(icv_object_win_border, icv_object_win_border,
+                winSize0.width - icv_object_win_border*2,
+                winSize0.height - icv_object_win_border*2);
+
+            CvMat img1, sum1, sqsum1, norm1, tilted1, mask1;
+            CvMat* _tilted = 0;
+
+            if( sz1.width <= 0 || sz1.height <= 0 )
+                break;
+            if( winSize.width > maxSize.width || winSize.height > maxSize.height )
+                break;
+            if( winSize.width < minSize.width || winSize.height < minSize.height )
+                continue;
+
+            img1 = cvMat( sz.height, sz.width, CV_8UC1, imgSmall->data.ptr );
+            sum1 = cvMat( sz.height+1, sz.width+1, CV_32SC1, sum->data.ptr );
+            sqsum1 = cvMat( sz.height+1, sz.width+1, CV_64FC1, sqsum->data.ptr );
+            if( tilted )
+            {
+                tilted1 = cvMat( sz.height+1, sz.width+1, CV_32SC1, tilted->data.ptr );
+                _tilted = &tilted1;
+            }
+            norm1 = cvMat( sz1.height, sz1.width, CV_32FC1, normImg ? normImg->data.ptr : 0 );
+            mask1 = cvMat( sz1.height, sz1.width, CV_8UC1, temp->data.ptr );
+
+            cvResize( img, &img1, CV_INTER_LINEAR );
+            cvIntegral( &img1, &sum1, &sqsum1, _tilted );
+			pVisCas->setIntegral(sz, cvarrToMat(sum), cv::cvarrToMat(&sqsum1));
+
+            int ystep = factor > 2 ? 1 : 2;
+            const int LOCS_PER_THREAD = 1000;
+            int stripCount = ((sz1.width/ystep)*(sz1.height + ystep-1)/ystep + LOCS_PER_THREAD/2)/LOCS_PER_THREAD;
+            stripCount = std::min(std::max(stripCount, 1), 100);
+
+            viscasSetImagesForHaarClassifierCascade( cascade, &sum1, &sqsum1, _tilted, 1. );
+			std::cout << "detecting at size " << sz.width << "X" << sz.height << std::endl;
+            cv::Mat _norm1 = cv::cvarrToMat(&norm1), _mask1 = cv::cvarrToMat(&mask1);
+			cv::HaarDetectObjects_ScaleImage_Invoker invoker =
+                         cv::HaarDetectObjects_ScaleImage_Invoker(cascade,
+                                (((sz1.height + stripCount - 1)/stripCount + ystep-1)/ystep)*ystep,
+                                factor, cv::cvarrToMat(&sum1), cv::cvarrToMat(&sqsum1), &_norm1, &_mask1,
+                                cv::Rect(equRect), allCandidates, rejectLevels, levelWeights, outputRejectLevels, &mtx, pVisCas);
+			invoker(cv::Range(0, stripCount));
+        }
+    }
+
+    rectList.resize(allCandidates.size());
+    if(!allCandidates.empty())
+        std::copy(allCandidates.begin(), allCandidates.end(), rectList.begin());
+
+    if( minNeighbors != 0 || findBiggestObject )
+    {
+        if( outputRejectLevels )
+        {
+            groupRectangles(rectList, rejectLevels, levelWeights, minNeighbors, GROUP_EPS );
+        }
+        else
+        {
+            groupRectangles(rectList, rweights, std::max(minNeighbors, 1), GROUP_EPS);
+        }
+    }
+    else
+        rweights.resize(rectList.size(),0);
+
+    if( findBiggestObject && rectList.size() )
+    {
+        CvAvgComp result_comp = {CvRect(),0};
+
+        for( size_t i = 0; i < rectList.size(); i++ )
+        {
+            cv::Rect r = rectList[i];
+            if( r.area() > cv::Rect(result_comp.rect).area() )
+            {
+                result_comp.rect = r;
+                result_comp.neighbors = rweights[i];
+            }
+        }
+        cvSeqPush( result_seq, &result_comp );
+    }
+    else
+    {
+        for( size_t i = 0; i < rectList.size(); i++ )
+        {
+            CvAvgComp c;
+            c.rect = rectList[i];
+            c.neighbors = !rweights.empty() ? rweights[i] : 0;
+            cvSeqPush( result_seq, &c );
+        }
+    }
+
+    return result_seq;
+}
+
+
+static CvHaarClassifierCascade*
+icvLoadCascadeCART( const char** input_cascade, int n, CvSize orig_window_size )
+{
+    int i;
+    CvHaarClassifierCascade* cascade = icvCreateHaarClassifierCascade(n);
+    cascade->orig_window_size = orig_window_size;
