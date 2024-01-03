@@ -1021,3 +1021,219 @@ icvLoadCascadeCART( const char** input_cascade, int n, CvSize orig_window_size )
     int i;
     CvHaarClassifierCascade* cascade = icvCreateHaarClassifierCascade(n);
     cascade->orig_window_size = orig_window_size;
+
+    for( i = 0; i < n; i++ )
+    {
+        int j, count, l;
+        float threshold = 0;
+        const char* stage = input_cascade[i];
+        int dl = 0;
+
+        /* tree links */
+        int parent = -1;
+        int next = -1;
+
+        sscanf( stage, "%d%n", &count, &dl );
+        stage += dl;
+
+        assert( count > 0 );
+        cascade->stage_classifier[i].count = count;
+        cascade->stage_classifier[i].classifier =
+            (CvHaarClassifier*)cvAlloc( count*sizeof(cascade->stage_classifier[i].classifier[0]));
+
+        for( j = 0; j < count; j++ )
+        {
+            CvHaarClassifier* classifier = cascade->stage_classifier[i].classifier + j;
+            int k, rects = 0;
+            char str[100];
+
+            sscanf( stage, "%d%n", &classifier->count, &dl );
+            stage += dl;
+
+            classifier->haar_feature = (CvHaarFeature*) cvAlloc(
+                classifier->count * ( sizeof( *classifier->haar_feature ) +
+                                      sizeof( *classifier->threshold ) +
+                                      sizeof( *classifier->left ) +
+                                      sizeof( *classifier->right ) ) +
+                (classifier->count + 1) * sizeof( *classifier->alpha ) );
+            classifier->threshold = (float*) (classifier->haar_feature+classifier->count);
+            classifier->left = (int*) (classifier->threshold + classifier->count);
+            classifier->right = (int*) (classifier->left + classifier->count);
+            classifier->alpha = (float*) (classifier->right + classifier->count);
+
+            for( l = 0; l < classifier->count; l++ )
+            {
+                sscanf( stage, "%d%n", &rects, &dl );
+                stage += dl;
+
+                assert( rects >= 2 && rects <= CV_HAAR_FEATURE_MAX );
+
+                for( k = 0; k < rects; k++ )
+                {
+                    CvRect r;
+                    int band = 0;
+                    sscanf( stage, "%d%d%d%d%d%f%n",
+                            &r.x, &r.y, &r.width, &r.height, &band,
+                            &(classifier->haar_feature[l].rect[k].weight), &dl );
+                    stage += dl;
+                    classifier->haar_feature[l].rect[k].r = r;
+                }
+                sscanf( stage, "%s%n", str, &dl );
+                stage += dl;
+
+                classifier->haar_feature[l].tilted = strncmp( str, "tilted", 6 ) == 0;
+
+                for( k = rects; k < CV_HAAR_FEATURE_MAX; k++ )
+                {
+                    memset( classifier->haar_feature[l].rect + k, 0,
+                            sizeof(classifier->haar_feature[l].rect[k]) );
+                }
+
+                sscanf( stage, "%f%d%d%n", &(classifier->threshold[l]),
+                                       &(classifier->left[l]),
+                                       &(classifier->right[l]), &dl );
+                stage += dl;
+            }
+            for( l = 0; l <= classifier->count; l++ )
+            {
+                sscanf( stage, "%f%n", &(classifier->alpha[l]), &dl );
+                stage += dl;
+            }
+        }
+
+        sscanf( stage, "%f%n", &threshold, &dl );
+        stage += dl;
+
+        cascade->stage_classifier[i].threshold = threshold;
+
+        /* load tree links */
+        if( sscanf( stage, "%d%d%n", &parent, &next, &dl ) != 2 )
+        {
+            parent = i - 1;
+            next = -1;
+        }
+        stage += dl;
+
+        cascade->stage_classifier[i].parent = parent;
+        cascade->stage_classifier[i].next = next;
+        cascade->stage_classifier[i].child = -1;
+
+        if( parent != -1 && cascade->stage_classifier[parent].child == -1 )
+        {
+            cascade->stage_classifier[parent].child = i;
+        }
+    }
+
+    return cascade;
+}
+
+#ifndef _MAX_PATH
+#define _MAX_PATH 1024
+#endif
+
+CV_IMPL CvHaarClassifierCascade*
+viscasLoadHaarClassifierCascade( const char* directory, CvSize orig_window_size )
+{
+    if( !directory )
+        CV_Error( CV_StsNullPtr, "Null path is passed" );
+
+    char name[_MAX_PATH];
+
+    int n = (int)strlen(directory)-1;
+    const char* slash = directory[n] == '\\' || directory[n] == '/' ? "" : "/";
+    int size = 0;
+
+    /* try to read the classifier from directory */
+    for( n = 0; ; n++ )
+    {
+        sprintf( name, "%s%s%d/AdaBoostCARTHaarClassifier.txt", directory, slash, n );
+        FILE* f = fopen( name, "rb" );
+        if( !f )
+            break;
+        fseek( f, 0, SEEK_END );
+        size += ftell( f ) + 1;
+        fclose(f);
+    }
+
+    if( n == 0 && slash[0] )
+        return (CvHaarClassifierCascade*)cvLoad( directory );
+
+    if( n == 0 )
+        CV_Error( CV_StsBadArg, "Invalid path" );
+
+    size += (n+1)*sizeof(char*);
+    const char** input_cascade = (const char**)cvAlloc( size );
+
+    if( !input_cascade )
+      CV_Error( CV_StsNoMem, "Could not allocate memory for input_cascade" );
+
+    char* ptr = (char*)(input_cascade + n + 1);
+
+    for( int i = 0; i < n; i++ )
+    {
+        sprintf( name, "%s/%d/AdaBoostCARTHaarClassifier.txt", directory, i );
+        FILE* f = fopen( name, "rb" );
+        if( !f )
+            CV_Error( CV_StsError, "" );
+        fseek( f, 0, SEEK_END );
+        size = (int)ftell( f );
+        fseek( f, 0, SEEK_SET );
+        size_t elements_read = fread( ptr, 1, size, f );
+        CV_Assert(elements_read == (size_t)(size));
+        fclose(f);
+        input_cascade[i] = ptr;
+        ptr += size;
+        *ptr++ = '\0';
+    }
+
+    input_cascade[n] = 0;
+
+    CvHaarClassifierCascade* cascade = icvLoadCascadeCART( input_cascade, n, orig_window_size );
+
+    if( input_cascade )
+        cvFree( &input_cascade );
+
+    return cascade;
+}
+
+
+CV_IMPL void
+viscasReleaseHaarClassifierCascade( CvHaarClassifierCascade** _cascade )
+{
+    if( _cascade && *_cascade )
+    {
+        int i, j;
+        CvHaarClassifierCascade* cascade = *_cascade;
+
+        for( i = 0; i < cascade->count; i++ )
+        {
+            for( j = 0; j < cascade->stage_classifier[i].count; j++ )
+                cvFree( &cascade->stage_classifier[i].classifier[j].haar_feature );
+            cvFree( &cascade->stage_classifier[i].classifier );
+        }
+        icvReleaseHidHaarClassifierCascade( &cascade->hid_cascade );
+        cvFree( _cascade );
+    }
+}
+
+
+/****************************************************************************************\
+*                                  Persistence functions                                 *
+\****************************************************************************************/
+
+/* field names */
+
+#define ICV_HAAR_SIZE_NAME            "size"
+#define ICV_HAAR_STAGES_NAME          "stages"
+#define ICV_HAAR_TREES_NAME           "trees"
+#define ICV_HAAR_FEATURE_NAME         "feature"
+#define ICV_HAAR_RECTS_NAME           "rects"
+#define ICV_HAAR_TILTED_NAME          "tilted"
+#define ICV_HAAR_THRESHOLD_NAME       "threshold"
+#define ICV_HAAR_LEFT_NODE_NAME       "left_node"
+#define ICV_HAAR_LEFT_VAL_NAME        "left_val"
+#define ICV_HAAR_RIGHT_NODE_NAME      "right_node"
+#define ICV_HAAR_RIGHT_VAL_NAME       "right_val"
+#define ICV_HAAR_STAGE_THRESHOLD_NAME "stage_threshold"
+#define ICV_HAAR_PARENT_NAME          "parent"
+#define ICV_HAAR_NEXT_NAME            "next"
