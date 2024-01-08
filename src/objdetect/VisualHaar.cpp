@@ -1676,3 +1676,91 @@ icvWriteHaarClassifier( CvFileStorage* fs, const char* name, const void* struct_
 
                 cvEndWriteStruct( fs ); /* split */
             }
+
+            cvEndWriteStruct( fs ); /* tree */
+        }
+
+        cvEndWriteStruct( fs ); /* trees */
+
+        cvWriteReal( fs, ICV_HAAR_STAGE_THRESHOLD_NAME, cascade->stage_classifier[i].threshold);
+        cvWriteInt( fs, ICV_HAAR_PARENT_NAME, cascade->stage_classifier[i].parent );
+        cvWriteInt( fs, ICV_HAAR_NEXT_NAME, cascade->stage_classifier[i].next );
+
+        cvEndWriteStruct( fs ); /* stage */
+    } /* for each stage */
+
+    cvEndWriteStruct( fs ); /* stages */
+    cvEndWriteStruct( fs ); /* root */
+}
+
+static void*
+icvCloneHaarClassifier( const void* struct_ptr )
+{
+    CvHaarClassifierCascade* cascade = NULL;
+
+    int i, j, k, n;
+    const CvHaarClassifierCascade* cascade_src =
+        (const CvHaarClassifierCascade*) struct_ptr;
+
+    n = cascade_src->count;
+    cascade = icvCreateHaarClassifierCascade(n);
+    cascade->orig_window_size = cascade_src->orig_window_size;
+
+    for( i = 0; i < n; ++i )
+    {
+        cascade->stage_classifier[i].parent = cascade_src->stage_classifier[i].parent;
+        cascade->stage_classifier[i].next = cascade_src->stage_classifier[i].next;
+        cascade->stage_classifier[i].child = cascade_src->stage_classifier[i].child;
+        cascade->stage_classifier[i].threshold = cascade_src->stage_classifier[i].threshold;
+
+        cascade->stage_classifier[i].count = 0;
+        cascade->stage_classifier[i].classifier =
+            (CvHaarClassifier*) cvAlloc( cascade_src->stage_classifier[i].count
+                * sizeof( cascade->stage_classifier[i].classifier[0] ) );
+
+        cascade->stage_classifier[i].count = cascade_src->stage_classifier[i].count;
+
+        for( j = 0; j < cascade->stage_classifier[i].count; ++j )
+            cascade->stage_classifier[i].classifier[j].haar_feature = NULL;
+
+        for( j = 0; j < cascade->stage_classifier[i].count; ++j )
+        {
+            const CvHaarClassifier* classifier_src =
+                &cascade_src->stage_classifier[i].classifier[j];
+            CvHaarClassifier* classifier =
+                &cascade->stage_classifier[i].classifier[j];
+
+            classifier->count = classifier_src->count;
+            classifier->haar_feature = (CvHaarFeature*) cvAlloc(
+                classifier->count * ( sizeof( *classifier->haar_feature ) +
+                                      sizeof( *classifier->threshold ) +
+                                      sizeof( *classifier->left ) +
+                                      sizeof( *classifier->right ) ) +
+                (classifier->count + 1) * sizeof( *classifier->alpha ) );
+            classifier->threshold = (float*) (classifier->haar_feature+classifier->count);
+            classifier->left = (int*) (classifier->threshold + classifier->count);
+            classifier->right = (int*) (classifier->left + classifier->count);
+            classifier->alpha = (float*) (classifier->right + classifier->count);
+            for( k = 0; k < classifier->count; ++k )
+            {
+                classifier->haar_feature[k] = classifier_src->haar_feature[k];
+                classifier->threshold[k] = classifier_src->threshold[k];
+                classifier->left[k] = classifier_src->left[k];
+                classifier->right[k] = classifier_src->right[k];
+                classifier->alpha[k] = classifier_src->alpha[k];
+            }
+            classifier->alpha[classifier->count] =
+                classifier_src->alpha[classifier->count];
+        }
+    }
+
+    return cascade;
+}
+
+
+CvType vis_haar_type( CV_TYPE_NAME_HAAR, icvIsHaarClassifier,
+                  (CvReleaseFunc)viscasReleaseHaarClassifierCascade,
+                  icvReadHaarClassifier, icvWriteHaarClassifier,
+                  icvCloneHaarClassifier );
+
+/* End of file. */
