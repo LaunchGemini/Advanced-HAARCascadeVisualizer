@@ -1237,3 +1237,213 @@ viscasReleaseHaarClassifierCascade( CvHaarClassifierCascade** _cascade )
 #define ICV_HAAR_STAGE_THRESHOLD_NAME "stage_threshold"
 #define ICV_HAAR_PARENT_NAME          "parent"
 #define ICV_HAAR_NEXT_NAME            "next"
+
+static int
+icvIsHaarClassifier( const void* struct_ptr )
+{
+    return CV_IS_HAAR_CLASSIFIER( struct_ptr );
+}
+
+static void*
+icvReadHaarClassifier( CvFileStorage* fs, CvFileNode* node )
+{
+    CvHaarClassifierCascade* cascade = NULL;
+
+    char buf[256];
+    CvFileNode* seq_fn = NULL; /* sequence */
+    CvFileNode* fn = NULL;
+    CvFileNode* stages_fn = NULL;
+    CvSeqReader stages_reader;
+    int n;
+    int i, j, k, l;
+    int parent, next;
+
+    stages_fn = cvGetFileNodeByName( fs, node, ICV_HAAR_STAGES_NAME );
+    if( !stages_fn || !CV_NODE_IS_SEQ( stages_fn->tag) )
+        CV_Error( CV_StsError, "Invalid stages node" );
+
+    n = stages_fn->data.seq->total;
+    cascade = icvCreateHaarClassifierCascade(n);
+
+    /* read size */
+    seq_fn = cvGetFileNodeByName( fs, node, ICV_HAAR_SIZE_NAME );
+    if( !seq_fn || !CV_NODE_IS_SEQ( seq_fn->tag ) || seq_fn->data.seq->total != 2 )
+        CV_Error( CV_StsError, "size node is not a valid sequence." );
+    fn = (CvFileNode*) cvGetSeqElem( seq_fn->data.seq, 0 );
+    if( !CV_NODE_IS_INT( fn->tag ) || fn->data.i <= 0 )
+        CV_Error( CV_StsError, "Invalid size node: width must be positive integer" );
+    cascade->orig_window_size.width = fn->data.i;
+    fn = (CvFileNode*) cvGetSeqElem( seq_fn->data.seq, 1 );
+    if( !CV_NODE_IS_INT( fn->tag ) || fn->data.i <= 0 )
+        CV_Error( CV_StsError, "Invalid size node: height must be positive integer" );
+    cascade->orig_window_size.height = fn->data.i;
+
+    cvStartReadSeq( stages_fn->data.seq, &stages_reader );
+    for( i = 0; i < n; ++i )
+    {
+        CvFileNode* stage_fn;
+        CvFileNode* trees_fn;
+        CvSeqReader trees_reader;
+
+        stage_fn = (CvFileNode*) stages_reader.ptr;
+        if( !CV_NODE_IS_MAP( stage_fn->tag ) )
+        {
+            sprintf( buf, "Invalid stage %d", i );
+            CV_Error( CV_StsError, buf );
+        }
+
+        trees_fn = cvGetFileNodeByName( fs, stage_fn, ICV_HAAR_TREES_NAME );
+        if( !trees_fn || !CV_NODE_IS_SEQ( trees_fn->tag )
+            || trees_fn->data.seq->total <= 0 )
+        {
+            sprintf( buf, "Trees node is not a valid sequence. (stage %d)", i );
+            CV_Error( CV_StsError, buf );
+        }
+
+        cascade->stage_classifier[i].classifier =
+            (CvHaarClassifier*) cvAlloc( trees_fn->data.seq->total
+                * sizeof( cascade->stage_classifier[i].classifier[0] ) );
+        for( j = 0; j < trees_fn->data.seq->total; ++j )
+        {
+            cascade->stage_classifier[i].classifier[j].haar_feature = NULL;
+        }
+        cascade->stage_classifier[i].count = trees_fn->data.seq->total;
+
+        cvStartReadSeq( trees_fn->data.seq, &trees_reader );
+        for( j = 0; j < trees_fn->data.seq->total; ++j )
+        {
+            CvFileNode* tree_fn;
+            CvSeqReader tree_reader;
+            CvHaarClassifier* classifier;
+            int last_idx;
+
+            classifier = &cascade->stage_classifier[i].classifier[j];
+            tree_fn = (CvFileNode*) trees_reader.ptr;
+            if( !CV_NODE_IS_SEQ( tree_fn->tag ) || tree_fn->data.seq->total <= 0 )
+            {
+                sprintf( buf, "Tree node is not a valid sequence."
+                         " (stage %d, tree %d)", i, j );
+                CV_Error( CV_StsError, buf );
+            }
+
+            classifier->count = tree_fn->data.seq->total;
+            classifier->haar_feature = (CvHaarFeature*) cvAlloc(
+                classifier->count * ( sizeof( *classifier->haar_feature ) +
+                                      sizeof( *classifier->threshold ) +
+                                      sizeof( *classifier->left ) +
+                                      sizeof( *classifier->right ) ) +
+                (classifier->count + 1) * sizeof( *classifier->alpha ) );
+            classifier->threshold = (float*) (classifier->haar_feature+classifier->count);
+            classifier->left = (int*) (classifier->threshold + classifier->count);
+            classifier->right = (int*) (classifier->left + classifier->count);
+            classifier->alpha = (float*) (classifier->right + classifier->count);
+
+            cvStartReadSeq( tree_fn->data.seq, &tree_reader );
+            for( k = 0, last_idx = 0; k < tree_fn->data.seq->total; ++k )
+            {
+                CvFileNode* node_fn;
+                CvFileNode* feature_fn;
+                CvFileNode* rects_fn;
+                CvSeqReader rects_reader;
+
+                node_fn = (CvFileNode*) tree_reader.ptr;
+                if( !CV_NODE_IS_MAP( node_fn->tag ) )
+                {
+                    sprintf( buf, "Tree node %d is not a valid map. (stage %d, tree %d)",
+                             k, i, j );
+                    CV_Error( CV_StsError, buf );
+                }
+                feature_fn = cvGetFileNodeByName( fs, node_fn, ICV_HAAR_FEATURE_NAME );
+                if( !feature_fn || !CV_NODE_IS_MAP( feature_fn->tag ) )
+                {
+                    sprintf( buf, "Feature node is not a valid map. "
+                             "(stage %d, tree %d, node %d)", i, j, k );
+                    CV_Error( CV_StsError, buf );
+                }
+                rects_fn = cvGetFileNodeByName( fs, feature_fn, ICV_HAAR_RECTS_NAME );
+                if( !rects_fn || !CV_NODE_IS_SEQ( rects_fn->tag )
+                    || rects_fn->data.seq->total < 1
+                    || rects_fn->data.seq->total > CV_HAAR_FEATURE_MAX )
+                {
+                    sprintf( buf, "Rects node is not a valid sequence. "
+                             "(stage %d, tree %d, node %d)", i, j, k );
+                    CV_Error( CV_StsError, buf );
+                }
+                cvStartReadSeq( rects_fn->data.seq, &rects_reader );
+                for( l = 0; l < rects_fn->data.seq->total; ++l )
+                {
+                    CvFileNode* rect_fn;
+                    CvRect r;
+
+                    rect_fn = (CvFileNode*) rects_reader.ptr;
+                    if( !CV_NODE_IS_SEQ( rect_fn->tag ) || rect_fn->data.seq->total != 5 )
+                    {
+                        sprintf( buf, "Rect %d is not a valid sequence. "
+                                 "(stage %d, tree %d, node %d)", l, i, j, k );
+                        CV_Error( CV_StsError, buf );
+                    }
+
+                    fn = CV_SEQ_ELEM( rect_fn->data.seq, CvFileNode, 0 );
+                    if( !CV_NODE_IS_INT( fn->tag ) || fn->data.i < 0 )
+                    {
+                        sprintf( buf, "x coordinate must be non-negative integer. "
+                                 "(stage %d, tree %d, node %d, rect %d)", i, j, k, l );
+                        CV_Error( CV_StsError, buf );
+                    }
+                    r.x = fn->data.i;
+                    fn = CV_SEQ_ELEM( rect_fn->data.seq, CvFileNode, 1 );
+                    if( !CV_NODE_IS_INT( fn->tag ) || fn->data.i < 0 )
+                    {
+                        sprintf( buf, "y coordinate must be non-negative integer. "
+                                 "(stage %d, tree %d, node %d, rect %d)", i, j, k, l );
+                        CV_Error( CV_StsError, buf );
+                    }
+                    r.y = fn->data.i;
+                    fn = CV_SEQ_ELEM( rect_fn->data.seq, CvFileNode, 2 );
+                    if( !CV_NODE_IS_INT( fn->tag ) || fn->data.i <= 0
+                        || r.x + fn->data.i > cascade->orig_window_size.width )
+                    {
+                        sprintf( buf, "width must be positive integer and "
+                                 "(x + width) must not exceed window width. "
+                                 "(stage %d, tree %d, node %d, rect %d)", i, j, k, l );
+                        CV_Error( CV_StsError, buf );
+                    }
+                    r.width = fn->data.i;
+                    fn = CV_SEQ_ELEM( rect_fn->data.seq, CvFileNode, 3 );
+                    if( !CV_NODE_IS_INT( fn->tag ) || fn->data.i <= 0
+                        || r.y + fn->data.i > cascade->orig_window_size.height )
+                    {
+                        sprintf( buf, "height must be positive integer and "
+                                 "(y + height) must not exceed window height. "
+                                 "(stage %d, tree %d, node %d, rect %d)", i, j, k, l );
+                        CV_Error( CV_StsError, buf );
+                    }
+                    r.height = fn->data.i;
+                    fn = CV_SEQ_ELEM( rect_fn->data.seq, CvFileNode, 4 );
+                    if( !CV_NODE_IS_REAL( fn->tag ) )
+                    {
+                        sprintf( buf, "weight must be real number. "
+                                 "(stage %d, tree %d, node %d, rect %d)", i, j, k, l );
+                        CV_Error( CV_StsError, buf );
+                    }
+
+                    classifier->haar_feature[k].rect[l].weight = (float) fn->data.f;
+                    classifier->haar_feature[k].rect[l].r = r;
+
+                    CV_NEXT_SEQ_ELEM( sizeof( *rect_fn ), rects_reader );
+                } /* for each rect */
+                for( l = rects_fn->data.seq->total; l < CV_HAAR_FEATURE_MAX; ++l )
+                {
+                    classifier->haar_feature[k].rect[l].weight = 0;
+                    classifier->haar_feature[k].rect[l].r = cvRect( 0, 0, 0, 0 );
+                }
+
+                fn = cvGetFileNodeByName( fs, feature_fn, ICV_HAAR_TILTED_NAME);
+                if( !fn || !CV_NODE_IS_INT( fn->tag ) )
+                {
+                    sprintf( buf, "tilted must be 0 or 1. "
+                             "(stage %d, tree %d, node %d)", i, j, k );
+                    CV_Error( CV_StsError, buf );
+                }
+                classifier->haar_feature[k].tilted = ( fn->data.i != 0 );
+                fn = cvGetFileNodeByName( fs, node_fn, ICV_HAAR_THRESHOLD_NAME);
