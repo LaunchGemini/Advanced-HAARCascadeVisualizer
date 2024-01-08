@@ -1447,3 +1447,232 @@ icvReadHaarClassifier( CvFileStorage* fs, CvFileNode* node )
                 }
                 classifier->haar_feature[k].tilted = ( fn->data.i != 0 );
                 fn = cvGetFileNodeByName( fs, node_fn, ICV_HAAR_THRESHOLD_NAME);
+                if( !fn || !CV_NODE_IS_REAL( fn->tag ) )
+                {
+                    sprintf( buf, "threshold must be real number. "
+                             "(stage %d, tree %d, node %d)", i, j, k );
+                    CV_Error( CV_StsError, buf );
+                }
+                classifier->threshold[k] = (float) fn->data.f;
+                fn = cvGetFileNodeByName( fs, node_fn, ICV_HAAR_LEFT_NODE_NAME);
+                if( fn )
+                {
+                    if( !CV_NODE_IS_INT( fn->tag ) || fn->data.i <= k
+                        || fn->data.i >= tree_fn->data.seq->total )
+                    {
+                        sprintf( buf, "left node must be valid node number. "
+                                 "(stage %d, tree %d, node %d)", i, j, k );
+                        CV_Error( CV_StsError, buf );
+                    }
+                    /* left node */
+                    classifier->left[k] = fn->data.i;
+                }
+                else
+                {
+                    fn = cvGetFileNodeByName( fs, node_fn, ICV_HAAR_LEFT_VAL_NAME );
+                    if( !fn )
+                    {
+                        sprintf( buf, "left node or left value must be specified. "
+                                 "(stage %d, tree %d, node %d)", i, j, k );
+                        CV_Error( CV_StsError, buf );
+                    }
+                    if( !CV_NODE_IS_REAL( fn->tag ) )
+                    {
+                        sprintf( buf, "left value must be real number. "
+                                 "(stage %d, tree %d, node %d)", i, j, k );
+                        CV_Error( CV_StsError, buf );
+                    }
+                    /* left value */
+                    if( last_idx >= classifier->count + 1 )
+                    {
+                        sprintf( buf, "Tree structure is broken: too many values. "
+                                 "(stage %d, tree %d, node %d)", i, j, k );
+                        CV_Error( CV_StsError, buf );
+                    }
+                    classifier->left[k] = -last_idx;
+                    classifier->alpha[last_idx++] = (float) fn->data.f;
+                }
+                fn = cvGetFileNodeByName( fs, node_fn,ICV_HAAR_RIGHT_NODE_NAME);
+                if( fn )
+                {
+                    if( !CV_NODE_IS_INT( fn->tag ) || fn->data.i <= k
+                        || fn->data.i >= tree_fn->data.seq->total )
+                    {
+                        sprintf( buf, "right node must be valid node number. "
+                                 "(stage %d, tree %d, node %d)", i, j, k );
+                        CV_Error( CV_StsError, buf );
+                    }
+                    /* right node */
+                    classifier->right[k] = fn->data.i;
+                }
+                else
+                {
+                    fn = cvGetFileNodeByName( fs, node_fn, ICV_HAAR_RIGHT_VAL_NAME );
+                    if( !fn )
+                    {
+                        sprintf( buf, "right node or right value must be specified. "
+                                 "(stage %d, tree %d, node %d)", i, j, k );
+                        CV_Error( CV_StsError, buf );
+                    }
+                    if( !CV_NODE_IS_REAL( fn->tag ) )
+                    {
+                        sprintf( buf, "right value must be real number. "
+                                 "(stage %d, tree %d, node %d)", i, j, k );
+                        CV_Error( CV_StsError, buf );
+                    }
+                    /* right value */
+                    if( last_idx >= classifier->count + 1 )
+                    {
+                        sprintf( buf, "Tree structure is broken: too many values. "
+                                 "(stage %d, tree %d, node %d)", i, j, k );
+                        CV_Error( CV_StsError, buf );
+                    }
+                    classifier->right[k] = -last_idx;
+                    classifier->alpha[last_idx++] = (float) fn->data.f;
+                }
+
+                CV_NEXT_SEQ_ELEM( sizeof( *node_fn ), tree_reader );
+            } /* for each node */
+            if( last_idx != classifier->count + 1 )
+            {
+                sprintf( buf, "Tree structure is broken: too few values. "
+                         "(stage %d, tree %d)", i, j );
+                CV_Error( CV_StsError, buf );
+            }
+
+            CV_NEXT_SEQ_ELEM( sizeof( *tree_fn ), trees_reader );
+        } /* for each tree */
+
+        fn = cvGetFileNodeByName( fs, stage_fn, ICV_HAAR_STAGE_THRESHOLD_NAME);
+        if( !fn || !CV_NODE_IS_REAL( fn->tag ) )
+        {
+            sprintf( buf, "stage threshold must be real number. (stage %d)", i );
+            CV_Error( CV_StsError, buf );
+        }
+        cascade->stage_classifier[i].threshold = (float) fn->data.f;
+
+        parent = i - 1;
+        next = -1;
+
+        fn = cvGetFileNodeByName( fs, stage_fn, ICV_HAAR_PARENT_NAME );
+        if( !fn || !CV_NODE_IS_INT( fn->tag )
+            || fn->data.i < -1 || fn->data.i >= cascade->count )
+        {
+            sprintf( buf, "parent must be integer number. (stage %d)", i );
+            CV_Error( CV_StsError, buf );
+        }
+        parent = fn->data.i;
+        fn = cvGetFileNodeByName( fs, stage_fn, ICV_HAAR_NEXT_NAME );
+        if( !fn || !CV_NODE_IS_INT( fn->tag )
+            || fn->data.i < -1 || fn->data.i >= cascade->count )
+        {
+            sprintf( buf, "next must be integer number. (stage %d)", i );
+            CV_Error( CV_StsError, buf );
+        }
+        next = fn->data.i;
+
+        cascade->stage_classifier[i].parent = parent;
+        cascade->stage_classifier[i].next = next;
+        cascade->stage_classifier[i].child = -1;
+
+        if( parent != -1 && cascade->stage_classifier[parent].child == -1 )
+        {
+            cascade->stage_classifier[parent].child = i;
+        }
+
+        CV_NEXT_SEQ_ELEM( sizeof( *stage_fn ), stages_reader );
+    } /* for each stage */
+
+    return cascade;
+}
+
+static void
+icvWriteHaarClassifier( CvFileStorage* fs, const char* name, const void* struct_ptr,
+                        CvAttrList attributes )
+{
+    int i, j, k, l;
+    char buf[256];
+    const CvHaarClassifierCascade* cascade = (const CvHaarClassifierCascade*) struct_ptr;
+
+    /* TODO: parameters check */
+
+    cvStartWriteStruct( fs, name, CV_NODE_MAP, CV_TYPE_NAME_HAAR, attributes );
+
+    cvStartWriteStruct( fs, ICV_HAAR_SIZE_NAME, CV_NODE_SEQ | CV_NODE_FLOW );
+    cvWriteInt( fs, NULL, cascade->orig_window_size.width );
+    cvWriteInt( fs, NULL, cascade->orig_window_size.height );
+    cvEndWriteStruct( fs ); /* size */
+
+    cvStartWriteStruct( fs, ICV_HAAR_STAGES_NAME, CV_NODE_SEQ );
+    for( i = 0; i < cascade->count; ++i )
+    {
+        cvStartWriteStruct( fs, NULL, CV_NODE_MAP );
+        sprintf( buf, "stage %d", i );
+        cvWriteComment( fs, buf, 1 );
+
+        cvStartWriteStruct( fs, ICV_HAAR_TREES_NAME, CV_NODE_SEQ );
+
+        for( j = 0; j < cascade->stage_classifier[i].count; ++j )
+        {
+            CvHaarClassifier* tree = &cascade->stage_classifier[i].classifier[j];
+
+            cvStartWriteStruct( fs, NULL, CV_NODE_SEQ );
+            sprintf( buf, "tree %d", j );
+            cvWriteComment( fs, buf, 1 );
+
+            for( k = 0; k < tree->count; ++k )
+            {
+                CvHaarFeature* feature = &tree->haar_feature[k];
+
+                cvStartWriteStruct( fs, NULL, CV_NODE_MAP );
+                if( k )
+                {
+                    sprintf( buf, "node %d", k );
+                }
+                else
+                {
+                    sprintf( buf, "root node" );
+                }
+                cvWriteComment( fs, buf, 1 );
+
+                cvStartWriteStruct( fs, ICV_HAAR_FEATURE_NAME, CV_NODE_MAP );
+
+                cvStartWriteStruct( fs, ICV_HAAR_RECTS_NAME, CV_NODE_SEQ );
+                for( l = 0; l < CV_HAAR_FEATURE_MAX && feature->rect[l].r.width != 0; ++l )
+                {
+                    cvStartWriteStruct( fs, NULL, CV_NODE_SEQ | CV_NODE_FLOW );
+                    cvWriteInt(  fs, NULL, feature->rect[l].r.x );
+                    cvWriteInt(  fs, NULL, feature->rect[l].r.y );
+                    cvWriteInt(  fs, NULL, feature->rect[l].r.width );
+                    cvWriteInt(  fs, NULL, feature->rect[l].r.height );
+                    cvWriteReal( fs, NULL, feature->rect[l].weight );
+                    cvEndWriteStruct( fs ); /* rect */
+                }
+                cvEndWriteStruct( fs ); /* rects */
+                cvWriteInt( fs, ICV_HAAR_TILTED_NAME, feature->tilted );
+                cvEndWriteStruct( fs ); /* feature */
+
+                cvWriteReal( fs, ICV_HAAR_THRESHOLD_NAME, tree->threshold[k]);
+
+                if( tree->left[k] > 0 )
+                {
+                    cvWriteInt( fs, ICV_HAAR_LEFT_NODE_NAME, tree->left[k] );
+                }
+                else
+                {
+                    cvWriteReal( fs, ICV_HAAR_LEFT_VAL_NAME,
+                        tree->alpha[-tree->left[k]] );
+                }
+
+                if( tree->right[k] > 0 )
+                {
+                    cvWriteInt( fs, ICV_HAAR_RIGHT_NODE_NAME, tree->right[k] );
+                }
+                else
+                {
+                    cvWriteReal( fs, ICV_HAAR_RIGHT_VAL_NAME,
+                        tree->alpha[-tree->right[k]] );
+                }
+
+                cvEndWriteStruct( fs ); /* split */
+            }
