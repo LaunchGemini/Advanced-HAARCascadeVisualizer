@@ -336,3 +336,274 @@ static void groupRectangles_meanshift(std::vector<Rect>& rectList, double detect
     Point3d smothing(8, 16, logZ);
 
     MeanshiftGrouping msGrouping(smothing, hits, hitWeights, 1e-5, 100);
+
+    msGrouping.getModes(resultHits, resultWeights, 1);
+
+    for (unsigned i=0; i < resultHits.size(); ++i)
+    {
+
+        double scale = std::exp(resultHits[i].z);
+        hitCenter.x = resultHits[i].x;
+        hitCenter.y = resultHits[i].y;
+        Size s( int(winDetSize.width * scale), int(winDetSize.height * scale) );
+        Rect resultRect( int(hitCenter.x-s.width/2), int(hitCenter.y-s.height/2),
+            int(s.width), int(s.height) );
+
+        if (resultWeights[i] > detectThreshold)
+        {
+            rectList.push_back(resultRect);
+            foundWeights->push_back(resultWeights[i]);
+        }
+    }
+}
+
+void groupRectangles(std::vector<Rect>& rectList, int groupThreshold, double eps)
+{
+    groupRectangles(rectList, groupThreshold, eps, 0, 0);
+}
+
+void groupRectangles(std::vector<Rect>& rectList, std::vector<int>& weights, int groupThreshold, double eps)
+{
+    groupRectangles(rectList, groupThreshold, eps, &weights, 0);
+}
+//used for cascade detection algorithm for ROC-curve calculating
+void groupRectangles(std::vector<Rect>& rectList, std::vector<int>& rejectLevels,
+                     std::vector<double>& levelWeights, int groupThreshold, double eps)
+{
+    groupRectangles(rectList, groupThreshold, eps, &rejectLevels, &levelWeights);
+}
+//can be used for HOG detection algorithm only
+void groupRectangles_meanshift(std::vector<Rect>& rectList, std::vector<double>& foundWeights,
+                               std::vector<double>& foundScales, double detectThreshold, Size winDetSize)
+{
+    groupRectangles_meanshift(rectList, detectThreshold, &foundWeights, foundScales, winDetSize);
+}
+
+
+FeatureEvaluator::~FeatureEvaluator() {}
+
+bool FeatureEvaluator::read(const FileNode&, Size _origWinSize)
+{
+    origWinSize = _origWinSize;
+    localSize = lbufSize = Size(0, 0);
+    if (scaleData.empty())
+        scaleData = makePtr<std::vector<ScaleData> >();
+    else
+        scaleData->clear();
+    return true;
+}
+
+Ptr<FeatureEvaluator> FeatureEvaluator::clone() const { return Ptr<FeatureEvaluator>(); }
+int FeatureEvaluator::getFeatureType() const {return -1;}
+bool FeatureEvaluator::setWindow(Point, int) { return true; }
+void FeatureEvaluator::getUMats(std::vector<UMat>& bufs)
+{
+    if (!(sbufFlag & USBUF_VALID))
+    {
+        sbuf.copyTo(usbuf);
+        sbufFlag |= USBUF_VALID;
+    }
+
+    bufs.clear();
+    bufs.push_back(uscaleData);
+    bufs.push_back(usbuf);
+    bufs.push_back(ufbuf);
+}
+
+void FeatureEvaluator::getMats()
+{
+    if (!(sbufFlag & SBUF_VALID))
+    {
+        usbuf.copyTo(sbuf);
+        sbufFlag |= SBUF_VALID;
+    }
+}
+
+float FeatureEvaluator::calcOrd(int) const { return 0.; }
+int FeatureEvaluator::calcCat(int) const { return 0; }
+
+bool FeatureEvaluator::updateScaleData( Size imgsz, const std::vector<float>& _scales )
+{
+    if( scaleData.empty() )
+        scaleData = makePtr<std::vector<ScaleData> >();
+
+    size_t i, nscales = _scales.size();
+    bool recalcOptFeatures = nscales != scaleData->size();
+    scaleData->resize(nscales);
+
+    int layer_dy = 0;
+    Point layer_ofs(0,0);
+    Size prevBufSize = sbufSize;
+    sbufSize.width = std::max(sbufSize.width, (int)alignSize(cvRound(imgsz.width/_scales[0]) + 31, 32));
+    recalcOptFeatures = recalcOptFeatures || sbufSize.width != prevBufSize.width;
+
+    for( i = 0; i < nscales; i++ )
+    {
+        FeatureEvaluator::ScaleData& s = scaleData->at(i);
+        if( !recalcOptFeatures && fabs(s.scale - _scales[i]) > FLT_EPSILON*100*_scales[i] )
+            recalcOptFeatures = true;
+        float sc = _scales[i];
+        Size sz;
+        sz.width = cvRound(imgsz.width/sc);
+        sz.height = cvRound(imgsz.height/sc);
+        s.ystep = sc >= 2 ? 1 : 2;
+        s.scale = sc;
+        s.szi = Size(sz.width+1, sz.height+1);
+
+        if( i == 0 )
+        {
+            layer_dy = s.szi.height;
+        }
+
+        if( layer_ofs.x + s.szi.width > sbufSize.width )
+        {
+            layer_ofs = Point(0, layer_ofs.y + layer_dy);
+            layer_dy = s.szi.height;
+        }
+        s.layer_ofs = layer_ofs.y*sbufSize.width + layer_ofs.x;
+        layer_ofs.x += s.szi.width;
+    }
+
+    layer_ofs.y += layer_dy;
+    sbufSize.height = std::max(sbufSize.height, layer_ofs.y);
+    recalcOptFeatures = recalcOptFeatures || sbufSize.height != prevBufSize.height;
+    return recalcOptFeatures;
+}
+
+
+bool FeatureEvaluator::setImage( InputArray _image, const std::vector<float>& _scales )
+{
+    Size imgsz = _image.size();
+    bool recalcOptFeatures = updateScaleData(imgsz, _scales);
+
+    size_t i, nscales = scaleData->size();
+    if (nscales == 0)
+    {
+        return false;
+    }
+    Size sz0 = scaleData->at(0).szi;
+    sz0 = Size(std::max(rbuf.cols, (int)alignSize(sz0.width, 16)), std::max(rbuf.rows, sz0.height));
+
+    if (recalcOptFeatures)
+    {
+        computeOptFeatures();
+        copyVectorToUMat(*scaleData, uscaleData);
+    }
+
+    if (_image.isUMat() && localSize.area() > 0)
+    {
+        usbuf.create(sbufSize.height*nchannels, sbufSize.width, CV_32S);
+        urbuf.create(sz0, CV_8U);
+
+        for (i = 0; i < nscales; i++)
+        {
+            const ScaleData& s = scaleData->at(i);
+            UMat dst(urbuf, Rect(0, 0, s.szi.width - 1, s.szi.height - 1));
+            resize(_image, dst, dst.size(), 1. / s.scale, 1. / s.scale, INTER_LINEAR);
+            computeChannels((int)i, dst);
+        }
+        sbufFlag = USBUF_VALID;
+    }
+    else
+    {
+        Mat image = _image.getMat();
+        sbuf.create(sbufSize.height*nchannels, sbufSize.width, CV_32S);
+        rbuf.create(sz0, CV_8U);
+
+        for (i = 0; i < nscales; i++)
+        {
+            const ScaleData& s = scaleData->at(i);
+            Mat dst(s.szi.height - 1, s.szi.width - 1, CV_8U, rbuf.ptr());
+            resize(image, dst, dst.size(), 1. / s.scale, 1. / s.scale, INTER_LINEAR);
+            computeChannels((int)i, dst);
+        }
+        sbufFlag = SBUF_VALID;
+    }
+
+    return true;
+}
+
+//----------------------------------------------  HaarEvaluator ---------------------------------------
+
+bool HaarEvaluator::Feature :: read( const FileNode& node )
+{
+    FileNode rnode = node[CC_RECTS];
+    FileNodeIterator it = rnode.begin(), it_end = rnode.end();
+
+    int ri;
+    for( ri = 0; ri < RECT_NUM; ri++ )
+    {
+        rect[ri].r = Rect();
+        rect[ri].weight = 0.f;
+    }
+
+    for(ri = 0; it != it_end; ++it, ri++)
+    {
+        FileNodeIterator it2 = (*it).begin();
+        it2 >> rect[ri].r.x >> rect[ri].r.y >>
+            rect[ri].r.width >> rect[ri].r.height >> rect[ri].weight;
+    }
+
+    tilted = (int)node[CC_TILTED] != 0;
+    return true;
+}
+
+HaarEvaluator::HaarEvaluator()
+{
+    optfeaturesPtr = 0;
+    pwin = 0;
+    localSize = Size(4, 2);
+    lbufSize = Size(0, 0);
+    nchannels = 0;
+    tofs = 0;
+}
+
+HaarEvaluator::~HaarEvaluator()
+{
+}
+
+bool HaarEvaluator::read(const FileNode& node, Size _origWinSize)
+{
+    if (!FeatureEvaluator::read(node, _origWinSize))
+        return false;
+    size_t i, n = node.size();
+    CV_Assert(n > 0);
+    if(features.empty())
+        features = makePtr<std::vector<Feature> >();
+    if(optfeatures.empty())
+        optfeatures = makePtr<std::vector<OptFeature> >();
+    if (optfeatures_lbuf.empty())
+        optfeatures_lbuf = makePtr<std::vector<OptFeature> >();
+    features->resize(n);
+    FileNodeIterator it = node.begin();
+    hasTiltedFeatures = false;
+    std::vector<Feature>& ff = *features;
+    sbufSize = Size();
+    ufbuf.release();
+
+    for(i = 0; i < n; i++, ++it)
+    {
+        if(!ff[i].read(*it))
+            return false;
+        if( ff[i].tilted )
+            hasTiltedFeatures = true;
+    }
+    nchannels = hasTiltedFeatures ? 3 : 2;
+    normrect = Rect(1, 1, origWinSize.width - 2, origWinSize.height - 2);
+
+    localSize = lbufSize = Size(0, 0);
+
+    return true;
+}
+
+Ptr<FeatureEvaluator> HaarEvaluator::clone() const
+{
+    Ptr<HaarEvaluator> ret = makePtr<HaarEvaluator>();
+    *ret = *this;
+    return ret;
+}
+
+
+void HaarEvaluator::computeChannels(int scaleIdx, InputArray img)
+{
+    const ScaleData& s = scaleData->at(scaleIdx);
