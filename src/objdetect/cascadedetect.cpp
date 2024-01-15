@@ -846,3 +846,246 @@ bool LBPEvaluator::setWindow( Point pt, int scaleIdx )
 
 Ptr<FeatureEvaluator> FeatureEvaluator::create( int featureType )
 {
+    return featureType == HAAR ? Ptr<FeatureEvaluator>(new HaarEvaluator) :
+        featureType == LBP ? Ptr<FeatureEvaluator>(new LBPEvaluator) :
+        Ptr<FeatureEvaluator>();
+}
+
+//---------------------------------------- Classifier Cascade --------------------------------------------
+
+CascadeClassifierImpl::CascadeClassifierImpl()
+{
+}
+
+CascadeClassifierImpl::~CascadeClassifierImpl()
+{
+}
+
+bool CascadeClassifierImpl::empty() const
+{
+    return !oldCascade && data.stages.empty();
+}
+
+bool CascadeClassifierImpl::load(const String& filename)
+{
+    oldCascade.release();
+    data = Data();
+    featureEvaluator.release();
+
+    FileStorage fs(filename, FileStorage::READ);
+    if( !fs.isOpened() )
+        return false;
+
+    if( read_(fs.getFirstTopLevelNode()) )
+        return true;
+
+    fs.release();
+
+    oldCascade.reset((CvHaarClassifierCascade*)cvLoad(filename.c_str(), 0, 0, 0));
+    return !oldCascade.empty();
+}
+
+void CascadeClassifierImpl::read(const FileNode& node)
+{
+    read_(node);
+}
+
+int CascadeClassifierImpl::runAt( Ptr<FeatureEvaluator>& evaluator, Point pt, int scaleIdx, double& weight )
+{
+    assert( !oldCascade &&
+           (data.featureType == FeatureEvaluator::HAAR ||
+            data.featureType == FeatureEvaluator::LBP ||
+            data.featureType == FeatureEvaluator::HOG) );
+
+    if( !evaluator->setWindow(pt, scaleIdx) )
+        return -1;
+    if( data.maxNodesPerTree == 1 )
+    {
+        if( data.featureType == FeatureEvaluator::HAAR )
+            return predictOrderedStump<HaarEvaluator>( *this, evaluator, weight );
+        else if( data.featureType == FeatureEvaluator::LBP )
+            return predictCategoricalStump<LBPEvaluator>( *this, evaluator, weight );
+        else
+            return -2;
+    }
+    else
+    {
+        if( data.featureType == FeatureEvaluator::HAAR )
+            return predictOrdered<HaarEvaluator>( *this, evaluator, weight );
+        else if( data.featureType == FeatureEvaluator::LBP )
+            return predictCategorical<LBPEvaluator>( *this, evaluator, weight );
+        else
+            return -2;
+    }
+}
+
+void CascadeClassifierImpl::setMaskGenerator(const Ptr<MaskGenerator>& _maskGenerator)
+{
+    maskGenerator=_maskGenerator;
+}
+Ptr<CascadeClassifierImpl::MaskGenerator> CascadeClassifierImpl::getMaskGenerator()
+{
+    return maskGenerator;
+}
+
+Ptr<BaseCascadeClassifier::MaskGenerator> createFaceDetectionMaskGenerator()
+{
+#ifdef HAVE_TEGRA_OPTIMIZATION
+    if (tegra::useTegra())
+        return tegra::getCascadeClassifierMaskGenerator();
+#endif
+    return Ptr<BaseCascadeClassifier::MaskGenerator>();
+}
+
+class CascadeClassifierInvoker : public ParallelLoopBody
+{
+public:
+    CascadeClassifierInvoker( CascadeClassifierImpl& _cc, int _nscales, int _nstripes,
+                              const FeatureEvaluator::ScaleData* _scaleData,
+                              const int* _stripeSizes, std::vector<Rect>& _vec,
+                              std::vector<int>& _levels, std::vector<double>& _weights,
+                              bool outputLevels, const Mat& _mask, Mutex* _mtx)
+    {
+        classifier = &_cc;
+        nscales = _nscales;
+        nstripes = _nstripes;
+        scaleData = _scaleData;
+        stripeSizes = _stripeSizes;
+        rectangles = &_vec;
+        rejectLevels = outputLevels ? &_levels : 0;
+        levelWeights = outputLevels ? &_weights : 0;
+        mask = _mask;
+        mtx = _mtx;
+    }
+
+    void operator()(const Range& range) const
+    {
+        Ptr<FeatureEvaluator> evaluator = classifier->featureEvaluator->clone();
+        double gypWeight = 0.;
+        Size origWinSize = classifier->data.origWinSize;
+
+        for( int scaleIdx = 0; scaleIdx < nscales; scaleIdx++ )
+        {
+            const FeatureEvaluator::ScaleData& s = scaleData[scaleIdx];
+            float scalingFactor = s.scale;
+            int yStep = s.ystep;
+            int stripeSize = stripeSizes[scaleIdx];
+            int y0 = range.start*stripeSize;
+            Size szw = s.getWorkingSize(origWinSize);
+            int y1 = std::min(range.end*stripeSize, szw.height);
+            Size winSize(cvRound(origWinSize.width * scalingFactor),
+                         cvRound(origWinSize.height * scalingFactor));
+
+            for( int y = y0; y < y1; y += yStep )
+            {
+                for( int x = 0; x < szw.width; x += yStep )
+                {
+                    int result = classifier->runAt(evaluator, Point(x, y), scaleIdx, gypWeight);
+                    if( rejectLevels )
+                    {
+                        if( result == 1 )
+                            result = -(int)classifier->data.stages.size();
+                        if( classifier->data.stages.size() + result == 0 )
+                        {
+                            mtx->lock();
+                            rectangles->push_back(Rect(cvRound(x*scalingFactor),
+                                                       cvRound(y*scalingFactor),
+                                                       winSize.width, winSize.height));
+                            rejectLevels->push_back(-result);
+                            levelWeights->push_back(gypWeight);
+                            mtx->unlock();
+                        }
+                    }
+                    else if( result > 0 )
+                    {
+                        mtx->lock();
+                        rectangles->push_back(Rect(cvRound(x*scalingFactor),
+                                                   cvRound(y*scalingFactor),
+                                                   winSize.width, winSize.height));
+                        mtx->unlock();
+                    }
+                    if( result == 0 )
+                        x += yStep;
+                }
+            }
+        }
+    }
+
+    CascadeClassifierImpl* classifier;
+    std::vector<Rect>* rectangles;
+    int nscales, nstripes;
+    const FeatureEvaluator::ScaleData* scaleData;
+    const int* stripeSizes;
+    std::vector<int> *rejectLevels;
+    std::vector<double> *levelWeights;
+    std::vector<float> scales;
+    Mat mask;
+    Mutex* mtx;
+};
+
+
+struct getRect { Rect operator ()(const CvAvgComp& e) const { return e.rect; } };
+struct getNeighbors { int operator ()(const CvAvgComp& e) const { return e.neighbors; } };
+
+bool CascadeClassifierImpl::isOldFormatCascade() const
+{
+    return !oldCascade.empty();
+}
+
+int CascadeClassifierImpl::getFeatureType() const
+{
+    return featureEvaluator->getFeatureType();
+}
+
+Size CascadeClassifierImpl::getOriginalWindowSize() const
+{
+    return data.origWinSize;
+}
+
+void* CascadeClassifierImpl::getOldCascade()
+{
+    return oldCascade;
+}
+
+static void detectMultiScaleOldFormat( const Mat& image, Ptr<CvHaarClassifierCascade> oldCascade,
+                                       std::vector<Rect>& objects,
+                                       std::vector<int>& rejectLevels,
+                                       std::vector<double>& levelWeights,
+                                       std::vector<CvAvgComp>& vecAvgComp,
+                                       double scaleFactor, int minNeighbors,
+                                       int flags, Size minObjectSize, Size maxObjectSize,
+                                       bool outputRejectLevels = false )
+{
+    MemStorage storage(cvCreateMemStorage(0));
+    CvMat _image = image;
+    CvSeq* _objects = cvHaarDetectObjectsForROC( &_image, oldCascade, storage, rejectLevels, levelWeights, scaleFactor,
+                                                 minNeighbors, flags, minObjectSize, maxObjectSize, outputRejectLevels );
+    Seq<CvAvgComp>(_objects).copyTo(vecAvgComp);
+    objects.resize(vecAvgComp.size());
+    std::transform(vecAvgComp.begin(), vecAvgComp.end(), objects.begin(), getRect());
+}
+
+
+void CascadeClassifierImpl::detectMultiScaleNoGrouping( InputArray _image, std::vector<Rect>& candidates,
+                                                    std::vector<int>& rejectLevels, std::vector<double>& levelWeights,
+                                                    double scaleFactor, Size minObjectSize, Size maxObjectSize,
+                                                    bool outputRejectLevels )
+{
+    Size imgsz = _image.size();
+
+    Mat grayImage;
+    _InputArray gray;
+
+    candidates.clear();
+    rejectLevels.clear();
+    levelWeights.clear();
+
+    if( maxObjectSize.height == 0 || maxObjectSize.width == 0 )
+        maxObjectSize = imgsz;
+
+    {
+        if (_image.channels() > 1)
+            cvtColor(_image, grayImage, COLOR_BGR2GRAY);
+        else if (_image.isMat())
+            grayImage = _image.getMat();
+        else
