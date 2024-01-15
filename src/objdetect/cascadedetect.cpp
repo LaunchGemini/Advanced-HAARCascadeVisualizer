@@ -1339,3 +1339,192 @@ bool CascadeClassifierImpl::Data::read(const FileNode &root)
         for( size_t stageIdx = 0; stageIdx < nstages; stageIdx++ )
         {
             const Stage& stage = stages[stageIdx];
+
+            int ntrees = stage.ntrees;
+            for( int i = 0; i < ntrees; i++, nodeOfs++, leafOfs+= 2 )
+            {
+                const DTreeNode& node = nodes[nodeOfs];
+                stumps.push_back(Stump(node.featureIdx, node.threshold,
+                                       leaves[leafOfs], leaves[leafOfs+1]));
+            }
+        }
+    }
+
+    return true;
+}
+
+
+bool CascadeClassifierImpl::read_(const FileNode& root)
+{
+    ustages.release();
+    unodes.release();
+    uleaves.release();
+    if( !data.read(root) )
+        return false;
+
+    // load features
+    featureEvaluator = FeatureEvaluator::create(data.featureType);
+    FileNode fn = root[CC_FEATURES];
+    if( fn.empty() )
+        return false;
+
+    return featureEvaluator->read(fn, data.origWinSize);
+}
+
+template<> void DefaultDeleter<CvHaarClassifierCascade>::operator ()(CvHaarClassifierCascade* obj) const
+{ cvReleaseHaarClassifierCascade(&obj); }
+
+
+BaseCascadeClassifier::~BaseCascadeClassifier()
+{
+}
+
+CascadeClassifier::CascadeClassifier() {}
+CascadeClassifier::CascadeClassifier(const String& filename)
+{
+    load(filename);
+}
+
+CascadeClassifier::~CascadeClassifier()
+{
+}
+
+bool CascadeClassifier::empty() const
+{
+    return cc.empty() || cc->empty();
+}
+
+bool CascadeClassifier::load( const String& filename )
+{
+    cc = makePtr<CascadeClassifierImpl>();
+    if(!cc->load(filename))
+        cc.release();
+    return !empty();
+}
+
+bool CascadeClassifier::read(const FileNode &root)
+{
+    Ptr<CascadeClassifierImpl> ccimpl = makePtr<CascadeClassifierImpl>();
+    bool ok = ccimpl->read_(root);
+    if( ok )
+        cc = ccimpl.staticCast<BaseCascadeClassifier>();
+    else
+        cc.release();
+    return ok;
+}
+
+void clipObjects(Size sz, std::vector<Rect>& objects,
+                 std::vector<int>* a, std::vector<double>* b)
+{
+    size_t i, j = 0, n = objects.size();
+    Rect win0 = Rect(0, 0, sz.width, sz.height);
+    if(a)
+    {
+        CV_Assert(a->size() == n);
+    }
+    if(b)
+    {
+        CV_Assert(b->size() == n);
+    }
+
+    for( i = 0; i < n; i++ )
+    {
+        Rect r = win0 & objects[i];
+        if( r.area() > 0 )
+        {
+            objects[j] = r;
+            if( i > j )
+            {
+                if(a) a->at(j) = a->at(i);
+                if(b) b->at(j) = b->at(i);
+            }
+            j++;
+        }
+    }
+
+    if( j < n )
+    {
+        objects.resize(j);
+        if(a) a->resize(j);
+        if(b) b->resize(j);
+    }
+}
+
+void CascadeClassifier::detectMultiScale( InputArray image,
+                      CV_OUT std::vector<Rect>& objects,
+                      double scaleFactor,
+                      int minNeighbors, int flags,
+                      Size minSize,
+                      Size maxSize )
+{
+    CV_Assert(!empty());
+    cc->detectMultiScale(image, objects, scaleFactor, minNeighbors, flags, minSize, maxSize);
+    clipObjects(image.size(), objects, 0, 0);
+}
+
+void CascadeClassifier::detectMultiScale( InputArray image,
+                      CV_OUT std::vector<Rect>& objects,
+                      CV_OUT std::vector<int>& numDetections,
+                      double scaleFactor,
+                      int minNeighbors, int flags,
+                      Size minSize, Size maxSize )
+{
+    CV_Assert(!empty());
+    cc->detectMultiScale(image, objects, numDetections,
+                         scaleFactor, minNeighbors, flags, minSize, maxSize);
+    clipObjects(image.size(), objects, &numDetections, 0);
+}
+
+void CascadeClassifier::detectMultiScale( InputArray image,
+                      CV_OUT std::vector<Rect>& objects,
+                      CV_OUT std::vector<int>& rejectLevels,
+                      CV_OUT std::vector<double>& levelWeights,
+                      double scaleFactor,
+                      int minNeighbors, int flags,
+                      Size minSize, Size maxSize,
+                      bool outputRejectLevels )
+{
+    CV_Assert(!empty());
+    cc->detectMultiScale(image, objects, rejectLevels, levelWeights,
+                         scaleFactor, minNeighbors, flags,
+                         minSize, maxSize, outputRejectLevels);
+    clipObjects(image.size(), objects, &rejectLevels, &levelWeights);
+}
+
+bool CascadeClassifier::isOldFormatCascade() const
+{
+    CV_Assert(!empty());
+    return cc->isOldFormatCascade();
+}
+
+Size CascadeClassifier::getOriginalWindowSize() const
+{
+    CV_Assert(!empty());
+    return cc->getOriginalWindowSize();
+}
+
+int CascadeClassifier::getFeatureType() const
+{
+    CV_Assert(!empty());
+    return cc->getFeatureType();
+}
+
+void* CascadeClassifier::getOldCascade()
+{
+    CV_Assert(!empty());
+    return cc->getOldCascade();
+}
+
+void CascadeClassifier::setMaskGenerator(const Ptr<BaseCascadeClassifier::MaskGenerator>& maskGenerator)
+{
+    CV_Assert(!empty());
+    cc->setMaskGenerator(maskGenerator);
+}
+
+Ptr<BaseCascadeClassifier::MaskGenerator> CascadeClassifier::getMaskGenerator()
+{
+    CV_Assert(!empty());
+    return cc->getMaskGenerator();
+}
+
+} // namespace cv
