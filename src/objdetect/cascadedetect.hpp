@@ -273,3 +273,221 @@ protected:
     (p2) = tilted + (rect).x + (rect).width + (step) * ((rect).y + (rect).width),   \
     /* (x + w - h, y + w + h) */                                                    \
     (p3) = tilted + (rect).x + (rect).width - (rect).height                         \
+           + (step) * ((rect).y + (rect).width + (rect).height)
+
+#define CALC_SUM_(p0, p1, p2, p3, offset) \
+    ((p0)[offset] - (p1)[offset] - (p2)[offset] + (p3)[offset])
+
+#define CALC_SUM(rect,offset) CALC_SUM_((rect)[0], (rect)[1], (rect)[2], (rect)[3], offset)
+
+#define CV_SUM_OFS( p0, p1, p2, p3, sum, rect, step )                 \
+/* (x, y) */                                                          \
+(p0) = sum + (rect).x + (step) * (rect).y,                            \
+/* (x + w, y) */                                                      \
+(p1) = sum + (rect).x + (rect).width + (step) * (rect).y,             \
+/* (x + w, y) */                                                      \
+(p2) = sum + (rect).x + (step) * ((rect).y + (rect).height),          \
+/* (x + w, y + h) */                                                  \
+(p3) = sum + (rect).x + (rect).width + (step) * ((rect).y + (rect).height)
+
+#define CV_TILTED_OFS( p0, p1, p2, p3, tilted, rect, step )                     \
+/* (x, y) */                                                                    \
+(p0) = tilted + (rect).x + (step) * (rect).y,                                   \
+/* (x - h, y + h) */                                                            \
+(p1) = tilted + (rect).x - (rect).height + (step) * ((rect).y + (rect).height), \
+/* (x + w, y + w) */                                                            \
+(p2) = tilted + (rect).x + (rect).width + (step) * ((rect).y + (rect).width),   \
+/* (x + w - h, y + w + h) */                                                    \
+(p3) = tilted + (rect).x + (rect).width - (rect).height                         \
++ (step) * ((rect).y + (rect).width + (rect).height)
+
+#define CALC_SUM_(p0, p1, p2, p3, offset) \
+((p0)[offset] - (p1)[offset] - (p2)[offset] + (p3)[offset])
+
+#define CALC_SUM(rect,offset) CALC_SUM_((rect)[0], (rect)[1], (rect)[2], (rect)[3], offset)
+
+#define CALC_SUM_OFS_(p0, p1, p2, p3, ptr) \
+((ptr)[p0] - (ptr)[p1] - (ptr)[p2] + (ptr)[p3])
+
+#define CALC_SUM_OFS(rect, ptr) CALC_SUM_OFS_((rect)[0], (rect)[1], (rect)[2], (rect)[3], ptr)
+
+//----------------------------------------------  HaarEvaluator ---------------------------------------
+class HaarEvaluator : public FeatureEvaluator
+{
+public:
+    struct Feature
+    {
+        Feature();
+        bool read( const FileNode& node );
+
+        bool tilted;
+
+        enum { RECT_NUM = 3 };
+        struct
+        {
+            Rect r;
+            float weight;
+        } rect[RECT_NUM];
+    };
+
+    struct OptFeature
+    {
+        OptFeature();
+
+        enum { RECT_NUM = Feature::RECT_NUM };
+        float calc( const int* pwin ) const;
+        void setOffsets( const Feature& _f, int step, int tofs );
+
+        int ofs[RECT_NUM][4];
+        float weight[4];
+    };
+
+    HaarEvaluator();
+    virtual ~HaarEvaluator();
+
+    virtual bool read( const FileNode& node, Size origWinSize);
+    virtual Ptr<FeatureEvaluator> clone() const;
+    virtual int getFeatureType() const { return FeatureEvaluator::HAAR; }
+
+    virtual bool setWindow(Point p, int scaleIdx);
+    Rect getNormRect() const;
+    int getSquaresOffset() const;
+
+    float operator()(int featureIdx) const
+    { return optfeaturesPtr[featureIdx].calc(pwin) * varianceNormFactor; }
+    virtual float calcOrd(int featureIdx) const
+    { return (*this)(featureIdx); }
+
+protected:
+    virtual void computeChannels( int i, InputArray img );
+    virtual void computeOptFeatures();
+
+    Ptr<std::vector<Feature> > features;
+    Ptr<std::vector<OptFeature> > optfeatures;
+    Ptr<std::vector<OptFeature> > optfeatures_lbuf;
+    bool hasTiltedFeatures;
+
+    int tofs, sqofs;
+    Vec4i nofs;
+    Rect normrect;
+    const int* pwin;
+    OptFeature* optfeaturesPtr; // optimization
+    float varianceNormFactor;
+};
+
+inline HaarEvaluator::Feature :: Feature()
+{
+    tilted = false;
+    rect[0].r = rect[1].r = rect[2].r = Rect();
+    rect[0].weight = rect[1].weight = rect[2].weight = 0;
+}
+
+inline HaarEvaluator::OptFeature :: OptFeature()
+{
+    weight[0] = weight[1] = weight[2] = 0.f;
+
+    ofs[0][0] = ofs[0][1] = ofs[0][2] = ofs[0][3] =
+    ofs[1][0] = ofs[1][1] = ofs[1][2] = ofs[1][3] =
+    ofs[2][0] = ofs[2][1] = ofs[2][2] = ofs[2][3] = 0;
+}
+
+inline float HaarEvaluator::OptFeature :: calc( const int* ptr ) const
+{
+    float ret = weight[0] * CALC_SUM_OFS(ofs[0], ptr) +
+                weight[1] * CALC_SUM_OFS(ofs[1], ptr);
+
+    if( weight[2] != 0.0f )
+        ret += weight[2] * CALC_SUM_OFS(ofs[2], ptr);
+
+    return ret;
+}
+
+//----------------------------------------------  LBPEvaluator -------------------------------------
+
+class LBPEvaluator : public FeatureEvaluator
+{
+public:
+    struct Feature
+    {
+        Feature();
+        Feature( int x, int y, int _block_w, int _block_h  ) :
+                 rect(x, y, _block_w, _block_h) {}
+
+        bool read(const FileNode& node );
+
+        Rect rect; // weight and height for block
+    };
+
+    struct OptFeature
+    {
+        OptFeature();
+
+        int calc( const int* pwin ) const;
+        void setOffsets( const Feature& _f, int step );
+        int ofs[16];
+    };
+
+    LBPEvaluator();
+    virtual ~LBPEvaluator();
+
+    virtual bool read( const FileNode& node, Size origWinSize );
+    virtual Ptr<FeatureEvaluator> clone() const;
+    virtual int getFeatureType() const { return FeatureEvaluator::LBP; }
+
+    virtual bool setWindow(Point p, int scaleIdx);
+
+    int operator()(int featureIdx) const
+    { return optfeaturesPtr[featureIdx].calc(pwin); }
+    virtual int calcCat(int featureIdx) const
+    { return (*this)(featureIdx); }
+protected:
+    virtual void computeChannels( int i, InputArray img );
+    virtual void computeOptFeatures();
+
+    Ptr<std::vector<Feature> > features;
+    Ptr<std::vector<OptFeature> > optfeatures;
+    Ptr<std::vector<OptFeature> > optfeatures_lbuf;
+    OptFeature* optfeaturesPtr; // optimization
+
+    const int* pwin;
+};
+
+
+inline LBPEvaluator::Feature :: Feature()
+{
+    rect = Rect();
+}
+
+inline LBPEvaluator::OptFeature :: OptFeature()
+{
+    for( int i = 0; i < 16; i++ )
+        ofs[i] = 0;
+}
+
+inline int LBPEvaluator::OptFeature :: calc( const int* p ) const
+{
+    int cval = CALC_SUM_OFS_( ofs[5], ofs[6], ofs[9], ofs[10], p );
+
+    return (CALC_SUM_OFS_( ofs[0], ofs[1], ofs[4], ofs[5], p ) >= cval ? 128 : 0) |   // 0
+           (CALC_SUM_OFS_( ofs[1], ofs[2], ofs[5], ofs[6], p ) >= cval ? 64 : 0) |    // 1
+           (CALC_SUM_OFS_( ofs[2], ofs[3], ofs[6], ofs[7], p ) >= cval ? 32 : 0) |    // 2
+           (CALC_SUM_OFS_( ofs[6], ofs[7], ofs[10], ofs[11], p ) >= cval ? 16 : 0) |  // 5
+           (CALC_SUM_OFS_( ofs[10], ofs[11], ofs[14], ofs[15], p ) >= cval ? 8 : 0)|  // 8
+           (CALC_SUM_OFS_( ofs[9], ofs[10], ofs[13], ofs[14], p ) >= cval ? 4 : 0)|   // 7
+           (CALC_SUM_OFS_( ofs[8], ofs[9], ofs[12], ofs[13], p ) >= cval ? 2 : 0)|    // 6
+           (CALC_SUM_OFS_( ofs[4], ofs[5], ofs[8], ofs[9], p ) >= cval ? 1 : 0);
+}
+
+
+//----------------------------------------------  predictor functions -------------------------------------
+
+template<class FEval>
+inline int predictOrdered( CascadeClassifierImpl& cascade,
+                           Ptr<FeatureEvaluator> &_featureEvaluator, double& sum )
+{
+    int nstages = (int)cascade.data.stages.size();
+    int nodeOfs = 0, leafOfs = 0;
+    FEval& featureEvaluator = (FEval&)*_featureEvaluator;
+    float* cascadeLeaves = &cascade.data.leaves[0];
+    CascadeClassifierImpl::Data::DTreeNode* cascadeNodes = &cascade.data.nodes[0];
+    CascadeClassifierImpl::Data::DTree* cascadeWeaks = &cascade.data.classifiers[0];
