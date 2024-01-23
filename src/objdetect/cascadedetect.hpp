@@ -491,3 +491,153 @@ inline int predictOrdered( CascadeClassifierImpl& cascade,
     float* cascadeLeaves = &cascade.data.leaves[0];
     CascadeClassifierImpl::Data::DTreeNode* cascadeNodes = &cascade.data.nodes[0];
     CascadeClassifierImpl::Data::DTree* cascadeWeaks = &cascade.data.classifiers[0];
+    CascadeClassifierImpl::Data::Stage* cascadeStages = &cascade.data.stages[0];
+
+    for( int si = 0; si < nstages; si++ )
+    {
+        CascadeClassifierImpl::Data::Stage& stage = cascadeStages[si];
+        int wi, ntrees = stage.ntrees;
+        sum = 0;
+
+        for( wi = 0; wi < ntrees; wi++ )
+        {
+            CascadeClassifierImpl::Data::DTree& weak = cascadeWeaks[stage.first + wi];
+            int idx = 0, root = nodeOfs;
+
+            do
+            {
+                CascadeClassifierImpl::Data::DTreeNode& node = cascadeNodes[root + idx];
+                double val = featureEvaluator(node.featureIdx);
+                idx = val < node.threshold ? node.left : node.right;
+            }
+            while( idx > 0 );
+            sum += cascadeLeaves[leafOfs - idx];
+            nodeOfs += weak.nodeCount;
+            leafOfs += weak.nodeCount + 1;
+        }
+        if( sum < stage.threshold )
+            return -si;
+    }
+    return 1;
+}
+
+template<class FEval>
+inline int predictCategorical( CascadeClassifierImpl& cascade,
+                               Ptr<FeatureEvaluator> &_featureEvaluator, double& sum )
+{
+    int nstages = (int)cascade.data.stages.size();
+    int nodeOfs = 0, leafOfs = 0;
+    FEval& featureEvaluator = (FEval&)*_featureEvaluator;
+    size_t subsetSize = (cascade.data.ncategories + 31)/32;
+    int* cascadeSubsets = &cascade.data.subsets[0];
+    float* cascadeLeaves = &cascade.data.leaves[0];
+    CascadeClassifierImpl::Data::DTreeNode* cascadeNodes = &cascade.data.nodes[0];
+    CascadeClassifierImpl::Data::DTree* cascadeWeaks = &cascade.data.classifiers[0];
+    CascadeClassifierImpl::Data::Stage* cascadeStages = &cascade.data.stages[0];
+
+    for(int si = 0; si < nstages; si++ )
+    {
+        CascadeClassifierImpl::Data::Stage& stage = cascadeStages[si];
+        int wi, ntrees = stage.ntrees;
+        sum = 0;
+
+        for( wi = 0; wi < ntrees; wi++ )
+        {
+            CascadeClassifierImpl::Data::DTree& weak = cascadeWeaks[stage.first + wi];
+            int idx = 0, root = nodeOfs;
+            do
+            {
+                CascadeClassifierImpl::Data::DTreeNode& node = cascadeNodes[root + idx];
+                int c = featureEvaluator(node.featureIdx);
+                const int* subset = &cascadeSubsets[(root + idx)*subsetSize];
+                idx = (subset[c>>5] & (1 << (c & 31))) ? node.left : node.right;
+            }
+            while( idx > 0 );
+            sum += cascadeLeaves[leafOfs - idx];
+            nodeOfs += weak.nodeCount;
+            leafOfs += weak.nodeCount + 1;
+        }
+        if( sum < stage.threshold )
+            return -si;
+    }
+    return 1;
+}
+
+template<class FEval>
+inline int predictOrderedStump( CascadeClassifierImpl& cascade,
+                                Ptr<FeatureEvaluator> &_featureEvaluator, double& sum )
+{
+    CV_Assert(!cascade.data.stumps.empty());
+    FEval& featureEvaluator = (FEval&)*_featureEvaluator;
+    const CascadeClassifierImpl::Data::Stump* cascadeStumps = &cascade.data.stumps[0];
+    const CascadeClassifierImpl::Data::Stage* cascadeStages = &cascade.data.stages[0];
+
+    int nstages = (int)cascade.data.stages.size();
+    double tmp = 0;
+
+    for( int stageIdx = 0; stageIdx < nstages; stageIdx++ )
+    {
+        const CascadeClassifierImpl::Data::Stage& stage = cascadeStages[stageIdx];
+        tmp = 0;
+
+        int ntrees = stage.ntrees;
+        for( int i = 0; i < ntrees; i++ )
+        {
+            const CascadeClassifierImpl::Data::Stump& stump = cascadeStumps[i];
+            double value = featureEvaluator(stump.featureIdx);
+            tmp += value < stump.threshold ? stump.left : stump.right;
+        }
+
+        if( tmp < stage.threshold )
+        {
+            sum = (double)tmp;
+            return -stageIdx;
+        }
+        cascadeStumps += ntrees;
+    }
+
+    sum = (double)tmp;
+    return 1;
+}
+
+template<class FEval>
+inline int predictCategoricalStump( CascadeClassifierImpl& cascade,
+                                    Ptr<FeatureEvaluator> &_featureEvaluator, double& sum )
+{
+    CV_Assert(!cascade.data.stumps.empty());
+    int nstages = (int)cascade.data.stages.size();
+    FEval& featureEvaluator = (FEval&)*_featureEvaluator;
+    size_t subsetSize = (cascade.data.ncategories + 31)/32;
+    const int* cascadeSubsets = &cascade.data.subsets[0];
+    const CascadeClassifierImpl::Data::Stump* cascadeStumps = &cascade.data.stumps[0];
+    const CascadeClassifierImpl::Data::Stage* cascadeStages = &cascade.data.stages[0];
+
+    double tmp = 0;
+    for( int si = 0; si < nstages; si++ )
+    {
+        const CascadeClassifierImpl::Data::Stage& stage = cascadeStages[si];
+        int wi, ntrees = stage.ntrees;
+        tmp = 0;
+
+        for( wi = 0; wi < ntrees; wi++ )
+        {
+            const CascadeClassifierImpl::Data::Stump& stump = cascadeStumps[wi];
+            int c = featureEvaluator(stump.featureIdx);
+            const int* subset = &cascadeSubsets[wi*subsetSize];
+            tmp += (subset[c>>5] & (1 << (c & 31))) ? stump.left : stump.right;
+        }
+
+        if( tmp < stage.threshold )
+        {
+            sum = tmp;
+            return -si;
+        }
+
+        cascadeStumps += ntrees;
+        cascadeSubsets += ntrees*subsetSize;
+    }
+
+    sum = (double)tmp;
+    return 1;
+}
+}
